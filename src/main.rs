@@ -15,7 +15,12 @@ mod models;
 mod services;
 mod utils;
 
-use handlers::user_handlers::{get_profile, update_profile_picture, get_settings, update_settings};
+use handlers::user_handlers::{
+    get_profile, update_profile_picture, get_settings, update_settings, change_password, delete_avatar,
+    admin_search_users, admin_update_user, get_user_roles, update_user_role,
+    get_user_activity, export_user_data, import_user_data
+};
+// use middleware::rate_limit::{api_rate_limit, auth_rate_limit, admin_rate_limit};
 
 // Global optimized pools and caches (following auth-service patterns)
 lazy_static! {
@@ -225,10 +230,24 @@ async fn main() -> std::io::Result<()> {
             .route("/health", web::get().to(health))
             .service(
                 web::scope("/api/users")
+                    // TODO: Add rate limiting middleware (.wrap(api_rate_limit()))
                     .route("/profile", web::get().to(get_profile))
                     .route("/profile-picture", web::post().to(update_profile_picture))
+                    .route("/avatar", web::delete().to(delete_avatar))
                     .route("/settings", web::get().to(get_settings))
                     .route("/settings", web::put().to(update_settings))
+                    .route("/change-password", web::post().to(change_password))
+                    .route("/roles", web::get().to(get_user_roles))
+                    .route("/roles", web::put().to(update_user_role))
+                    .route("/activity", web::get().to(get_user_activity))
+                    .route("/export", web::get().to(export_user_data))
+                    .route("/import", web::post().to(import_user_data))
+            )
+            .service(
+                web::scope("/api/admin/users")
+                    // TODO: Add rate limiting middleware (.wrap(admin_rate_limit()))
+                    .route("", web::get().to(admin_search_users))
+                    .route("/{id}", web::put().to(admin_update_user))
             )
     })
     .bind("0.0.0.0:8081")?

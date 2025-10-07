@@ -1,5 +1,5 @@
 # Multi-stage Dockerfile for user-service (following auth-service patterns)
-FROM rust:1.75 as builder
+FROM rust:1.82-slim as builder
 
 # Set working directory
 WORKDIR /app

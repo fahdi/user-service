@@ -5,12 +5,14 @@ use std::sync::{Arc, Mutex};
 use std::num::NonZeroUsize;
 use lazy_static::lazy_static;
 
-use crate::models::user::{StandardizedUser, CachedUserProfile};
+use crate::models::user::{StandardizedUser, CachedUserProfile, SettingsResponse};
 
-// Global LRU cache for user profiles (Phase 4 optimization)
+// Global LRU caches for optimal performance (Phase 4 optimization)
 lazy_static! {
     static ref PROFILE_CACHE: Arc<Mutex<LruCache<String, CachedUserProfile>>> = 
         Arc::new(Mutex::new(LruCache::new(NonZeroUsize::new(500).unwrap())));
+    static ref SETTINGS_CACHE: Arc<Mutex<LruCache<String, SettingsResponse>>> = 
+        Arc::new(Mutex::new(LruCache::new(NonZeroUsize::new(300).unwrap())));
 }
 
 // Get Redis connection (defined in main.rs)
@@ -141,6 +143,62 @@ pub async fn invalidate_profile_cache(cache_key: &str) -> Result<(), Box<dyn std
     
     // Remove from LRU cache
     if let Ok(mut cache) = PROFILE_CACHE.lock() {
+        cache.pop(cache_key);
+    }
+    
+    Ok(())
+}
+
+// Get cached user settings (LRU first, then Redis) - Phase 4 multi-layer caching
+pub async fn get_cached_settings(cache_key: &str) -> Option<SettingsResponse> {
+    // First check in-memory LRU cache
+    if let Ok(mut cache) = SETTINGS_CACHE.lock() {
+        if let Some(cached_settings) = cache.get(cache_key) {
+            return Some(cached_settings.clone());
+        }
+    }
+    
+    // Then check Redis with pooled connection
+    if let Ok(mut conn) = get_redis_connection().await {
+        if let Ok(cached_data) = conn.get::<_, String>(cache_key).await {
+            if let Ok(cached_settings) = serde_json::from_str::<SettingsResponse>(&cached_data) {
+                // Store in LRU for even faster access next time
+                if let Ok(mut cache) = SETTINGS_CACHE.lock() {
+                    cache.put(cache_key.to_string(), cached_settings.clone());
+                }
+                return Some(cached_settings);
+            }
+        }
+    }
+    
+    None
+}
+
+// Cache user settings in Redis and LRU (Phase 4 multi-layer caching)
+pub async fn cache_settings(cache_key: &str, settings: &SettingsResponse, ttl: u64) -> Result<(), Box<dyn std::error::Error>> {
+    // Cache in Redis
+    if let Ok(mut conn) = get_redis_connection().await {
+        let serialized = serde_json::to_string(settings)?;
+        let _: () = conn.set_ex(cache_key, serialized, ttl).await?;
+    }
+    
+    // Cache in LRU for fastest access
+    if let Ok(mut cache) = SETTINGS_CACHE.lock() {
+        cache.put(cache_key.to_string(), settings.clone());
+    }
+    
+    Ok(())
+}
+
+// Invalidate user settings cache
+pub async fn invalidate_settings_cache(cache_key: &str) -> Result<(), Box<dyn std::error::Error>> {
+    // Remove from Redis
+    if let Ok(mut conn) = get_redis_connection().await {
+        let _: Result<i32, redis::RedisError> = conn.del(cache_key).await;
+    }
+    
+    // Remove from LRU cache
+    if let Ok(mut cache) = SETTINGS_CACHE.lock() {
         cache.pop(cache_key);
     }
     
