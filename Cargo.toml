@@ -35,15 +35,14 @@ jsonwebtoken = "9.3"
 bcrypt = "0.15"
 actix-web-httpauth = "0.8"
 
-# Image processing
+# Image processing (for avatars)
 image = "0.25"
 
 # HTTP client
 reqwest = { version = "0.12", features = ["json", "multipart"] }
 
-# Google Drive API
-google-drive3 = "5.0"
-yup-oauth2 = "10.0"
+# Validation
+validator = { version = "0.16", features = ["derive"] }
 
 # Utilities
 uuid = { version = "1.8", features = ["v4"] }
