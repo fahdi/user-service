@@ -198,7 +198,9 @@ async fn create_database_indexes() -> Result<(), Box<dyn std::error::Error>> {
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
     env_logger::init();
-    log::info!("Starting User Service on port 8081");
+    
+    let port = env::var("PORT").unwrap_or_else(|_| "8081".to_string());
+    log::info!("Starting User Service on port {}", port);
 
     // Initialize database connection pools at startup
     log::info!("Initializing MongoDB connection pool...");
@@ -250,7 +252,7 @@ async fn main() -> std::io::Result<()> {
                     .route("/{id}", web::put().to(admin_update_user))
             )
     })
-    .bind("0.0.0.0:8081")?
+    .bind(format!("0.0.0.0:{}", port))?
     .run()
     .await
 }
