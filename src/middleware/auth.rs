@@ -17,7 +17,7 @@ pub fn extract_claims_from_request(req: &actix_web::HttpRequest) -> Result<Claim
 
     let token = &auth_header[7..];
     let jwt_secret = env::var("JWT_SECRET")
-        .unwrap_or_else(|_| "your-secret-key-change-in-production-isupercoder-2024".to_string());
+        .expect("JWT_SECRET environment variable must be set — refusing to start with insecure default");
     
     let validation = Validation::default();
     

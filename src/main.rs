@@ -46,23 +46,10 @@ async fn init_redis_pool() -> Result<RedisPool, Box<dyn std::error::Error>> {
     Ok(pool)
 }
 
-// Get Redis connection from pool
-async fn get_redis_connection() -> Result<deadpool_redis::Connection, Box<dyn std::error::Error>> {
-    if let Ok(pool_guard) = REDIS_POOL.lock() {
-        if let Some(pool) = pool_guard.as_ref() {
-            return Ok(pool.get().await?);
-        }
-    }
-    
-    // Initialize pool if not exists
-    let pool = init_redis_pool().await?;
-    Ok(pool.get().await?)
-}
-
 // Initialize MongoDB connection pool (identical to auth-service pattern)
 async fn init_mongodb_client() -> Result<Client, mongodb::error::Error> {
     let uri = env::var("MONGODB_URI")
-        .unwrap_or_else(|_| "mongodb://app_user:iSuperCoder_App_2025_Secure_Key_8e7d6c5b4a392817@database:27017/isupercoder?authSource=admin".to_string());
+        .expect("MONGODB_URI environment variable must be set — refusing to use hardcoded credentials");
     
     let mut client_options = ClientOptions::parse(&uri).await?;
     
@@ -206,7 +193,7 @@ async fn main() -> std::io::Result<()> {
     log::info!("Initializing MongoDB connection pool...");
     if let Err(e) = init_mongodb_client().await {
         log::error!("Failed to initialize MongoDB client: {}", e);
-        return Err(std::io::Error::new(std::io::ErrorKind::Other, "Database initialization failed"));
+        return Err(std::io::Error::other("Database initialization failed"));
     }
     log::info!("MongoDB connection pool initialized successfully");
 

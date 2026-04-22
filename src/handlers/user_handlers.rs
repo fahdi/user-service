@@ -22,6 +22,20 @@ use crate::services::cache_service::{
 use crate::services::google_drive_service::upload_profile_picture;
 use crate::middleware::auth::extract_claims_from_request;
 use crate::get_database;
+use crate::utils::security::{generate_secure_password, validate_email, escape_regex};
+
+/// Helper: extract _id from a BSON document, returning an HTTP 500 error on failure.
+fn extract_doc_id(doc: &mongodb::bson::Document) -> std::result::Result<String, HttpResponse> {
+    doc.get_object_id("_id")
+        .map(|oid| oid.to_hex())
+        .map_err(|_| {
+            log::error!("Document missing valid _id field");
+            HttpResponse::InternalServerError().json(ErrorResponse {
+                success: false,
+                error: "Internal error: malformed document".to_string(),
+            })
+        })
+}
 
 // Get user profile endpoint (matches Node.js /api/users/profile exactly)
 pub async fn get_profile(req: HttpRequest, query: web::Query<serde_json::Value>) -> Result<HttpResponse> {
@@ -142,7 +156,10 @@ pub async fn get_profile(req: HttpRequest, query: web::Query<serde_json::Value>)
     };
 
     // Transform to standardized format (following UserUtils.fromDatabase from Node.js)
-    let user_id_str = user.get_object_id("_id").unwrap().to_hex();
+    let user_id_str = match extract_doc_id(&user) {
+        Ok(id) => id,
+        Err(resp) => return Ok(resp),
+    };
     let standardized_user = StandardizedUser {
         _id: user_id_str.clone(),
         id: user_id_str.clone(),
@@ -260,8 +277,12 @@ pub async fn get_settings(req: HttpRequest) -> Result<HttpResponse> {
     };
 
     let mut response_settings = settings;
+    let settings_user_id = match extract_doc_id(&user) {
+        Ok(id) => id,
+        Err(resp) => return Ok(resp),
+    };
     response_settings.user = Some(UserBasicInfo {
-        _id: user.get_object_id("_id").unwrap().to_hex(),
+        _id: settings_user_id,
         email: user.get_str("email").unwrap_or("").to_string(),
         name: user.get_str("name").unwrap_or("").to_string(),
         role: user.get_str("role").unwrap_or("customer").to_string(),
@@ -367,10 +388,19 @@ pub async fn update_settings(req: HttpRequest, body: web::Json<SettingsUpdateReq
         if let Some(new_email) = &account_changes.new_email {
             let current_email = current_user.get_str("email").unwrap_or("");
             if new_email != current_email {
+                let current_oid = match current_user.get_object_id("_id") {
+                    Ok(oid) => oid,
+                    Err(_) => {
+                        return Ok(HttpResponse::InternalServerError().json(ErrorResponse {
+                            success: false,
+                            error: "Internal error: malformed document".to_string(),
+                        }));
+                    }
+                };
                 let email_exists = users_collection.find_one(
-                    doc! { 
+                    doc! {
                         "email": new_email.to_lowercase(),
-                        "_id": { "$ne": current_user.get_object_id("_id").unwrap() }
+                        "_id": { "$ne": current_oid }
                     },
                     None
                 ).await.unwrap_or(None);
@@ -410,7 +440,16 @@ pub async fn update_settings(req: HttpRequest, body: web::Json<SettingsUpdateReq
             update_doc.insert("email", new_email.to_lowercase());
         }
         if let Some(new_password) = &account_changes.new_password {
-            let password_hash = hash(new_password, 12).unwrap();
+            let password_hash = match hash(new_password, 12) {
+                Ok(h) => h,
+                Err(e) => {
+                    log::error!("Failed to hash password: {}", e);
+                    return Ok(HttpResponse::InternalServerError().json(ErrorResponse {
+                        success: false,
+                        error: "Failed to process password".to_string(),
+                    }));
+                }
+            };
             update_doc.insert("password", password_hash);
         }
     }
@@ -920,12 +959,13 @@ pub async fn admin_search_users(req: HttpRequest, query: web::Query<UserSearchQu
     // Build search filter
     let mut filter = doc! {};
     
-    // Search by query string (name or email)
+    // Search by query string (name or email) — escape regex metacharacters to prevent injection
     if let Some(q) = &query.q {
         if !q.trim().is_empty() {
+            let escaped_q = escape_regex(q);
             filter.insert("$or", vec![
-                doc! { "name": { "$regex": q, "$options": "i" } },
-                doc! { "email": { "$regex": q, "$options": "i" } }
+                doc! { "name": { "$regex": &escaped_q, "$options": "i" } },
+                doc! { "email": { "$regex": &escaped_q, "$options": "i" } }
             ]);
         }
     }
@@ -965,8 +1005,11 @@ pub async fn admin_search_users(req: HttpRequest, query: web::Query<UserSearchQu
 
     let mut users = Vec::new();
     while let Some(user_doc) = cursor.try_next().await.unwrap_or(None) {
-        // Transform to standardized format
-        let user_id_str = user_doc.get_object_id("_id").unwrap().to_hex();
+        // Transform to standardized format — skip docs with missing _id
+        let user_id_str = match extract_doc_id(&user_doc) {
+            Ok(id) => id,
+            Err(_) => continue,
+        };
         let standardized_user = StandardizedUser {
             _id: user_id_str.clone(),
             id: user_id_str.clone(),
@@ -1410,7 +1453,10 @@ pub async fn get_user_activity(req: HttpRequest, query: web::Query<ActivityQuery
 
     let mut activities = Vec::new();
     while let Some(activity_doc) = cursor.try_next().await.unwrap_or(None) {
-        let activity_id = activity_doc.get_object_id("_id").unwrap().to_hex();
+        let activity_id = match extract_doc_id(&activity_doc) {
+            Ok(id) => id,
+            Err(_) => continue,
+        };
         let activity = ActivityLog {
             id: activity_id,
             user_id: activity_doc.get_str("user_id").unwrap_or("").to_string(),
@@ -1505,7 +1551,10 @@ pub async fn export_user_data(req: HttpRequest) -> Result<HttpResponse> {
     };
 
     // Transform user to standardized format
-    let user_id_str = user.get_object_id("_id").unwrap().to_hex();
+    let user_id_str = match extract_doc_id(&user) {
+        Ok(id) => id,
+        Err(resp) => return Ok(resp),
+    };
     let standardized_user = StandardizedUser {
         _id: user_id_str.clone(),
         id: user_id_str.clone(),
@@ -1554,7 +1603,10 @@ pub async fn export_user_data(req: HttpRequest) -> Result<HttpResponse> {
 
     let mut activities = Vec::new();
     while let Some(activity_doc) = cursor.try_next().await.unwrap_or(None) {
-        let activity_id = activity_doc.get_object_id("_id").unwrap().to_hex();
+        let activity_id = match extract_doc_id(&activity_doc) {
+            Ok(id) => id,
+            Err(_) => continue,
+        };
         let activity = ActivityLog {
             id: activity_id,
             user_id: activity_doc.get_str("user_id").unwrap_or("").to_string(),
@@ -1611,8 +1663,8 @@ pub async fn import_user_data(req: HttpRequest, body: web::Json<DataImportReques
         }));
     }
 
-    // Validate email format
-    if !body.data.email.contains('@') {
+    // Validate email format (proper structural validation, not just contains('@'))
+    if !validate_email(&body.data.email) {
         return Ok(HttpResponse::BadRequest().json(ErrorResponse {
             success: false,
             error: "Invalid email format".to_string(),
@@ -1649,6 +1701,19 @@ pub async fn import_user_data(req: HttpRequest, body: web::Json<DataImportReques
         }));
     }
 
+    // Generate a cryptographically random temporary password (never expose it in response)
+    let temp_password = generate_secure_password();
+    let password_hash = match hash(&temp_password, 12) {
+        Ok(h) => h,
+        Err(e) => {
+            log::error!("Failed to hash temporary password: {}", e);
+            return Ok(HttpResponse::InternalServerError().json(ErrorResponse {
+                success: false,
+                error: "Failed to process password".to_string(),
+            }));
+        }
+    };
+
     // Create new user document
     let mut user_doc = doc! {
         "email": body.data.email.to_lowercase(),
@@ -1656,14 +1721,16 @@ pub async fn import_user_data(req: HttpRequest, body: web::Json<DataImportReques
         "role": body.data.role.as_ref().unwrap_or(&"customer".to_string()),
         "isActive": true,
         "emailVerified": false,
-        "password": hash("ChangeMe123!", 12).unwrap(), // Temporary password
+        "password": password_hash,
         "createdAt": DateTime::now(),
         "updatedAt": DateTime::now(),
     };
 
     // Add settings if provided
     if let Some(settings) = &body.data.settings {
-        user_doc.insert("settings", mongodb::bson::to_bson(settings).unwrap());
+        if let Ok(bson_val) = mongodb::bson::to_bson(settings) {
+            user_doc.insert("settings", bson_val);
+        }
     }
 
     // Insert user
@@ -1676,7 +1743,7 @@ pub async fn import_user_data(req: HttpRequest, body: web::Json<DataImportReques
                 imported_count: 1,
                 failed_count: 0,
                 errors: vec![],
-                message: "User imported successfully. Temporary password: ChangeMe123!".to_string(),
+                message: "User imported successfully. A password reset is required.".to_string(),
             }))
         }
         Err(e) => {

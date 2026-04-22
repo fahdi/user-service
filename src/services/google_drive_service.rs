@@ -155,7 +155,7 @@ async fn make_file_public(
     
     let client = reqwest::Client::new();
     let _response = client
-        .post(&format!("https://www.googleapis.com/drive/v3/files/{}/permissions", file_id))
+        .post(format!("https://www.googleapis.com/drive/v3/files/{}/permissions", file_id))
         .bearer_auth(access_token)
         .header("Content-Type", "application/json")
         .json(&permission)
