@@ -5,7 +5,6 @@ use serde_json::json;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use validator::Validate;
 
     // Simple health endpoint test
     async fn health_handler() -> Result<HttpResponse> {

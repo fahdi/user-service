@@ -18,14 +18,17 @@ lazy_static! {
 // Get Redis connection (defined in main.rs)
 async fn get_redis_connection() -> Result<deadpool_redis::Connection, Box<dyn std::error::Error>> {
     use crate::REDIS_POOL;
-    
-    if let Ok(pool_guard) = REDIS_POOL.lock() {
-        if let Some(pool) = pool_guard.as_ref() {
-            return Ok(pool.get().await?);
-        }
+
+    // Clone the pool outside the lock scope to avoid holding MutexGuard across await
+    let pool = {
+        let pool_guard = REDIS_POOL.lock().map_err(|e| format!("Lock poisoned: {}", e))?;
+        pool_guard.as_ref().cloned()
+    };
+
+    match pool {
+        Some(p) => Ok(p.get().await?),
+        None => Err("Redis pool not initialized".into()),
     }
-    
-    Err("Redis pool not initialized".into())
 }
 
 // Get cached user profile (LRU first, then Redis) - Phase 4 multi-layer caching
@@ -35,17 +38,17 @@ pub async fn get_cached_profile(cache_key: &str) -> Option<StandardizedUser> {
         if let Some(cached_profile) = cache.get(cache_key) {
             let current_time = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
             if current_time - cached_profile.cached_at < cached_profile.ttl {
-                // Convert cached profile to StandardizedUser
+                // Convert cached profile to StandardizedUser (using actual stored values)
                 return Some(StandardizedUser {
                     _id: cached_profile.id.clone(),
                     id: cached_profile.id.clone(),
                     email: cached_profile.email.clone(),
                     name: cached_profile.name.clone(),
                     role: cached_profile.role.clone(),
-                    is_active: true, // Assume active from cache
-                    email_verified: true, // Assume verified from cache
-                    created_at: chrono::Utc::now().to_rfc3339(),
-                    updated_at: chrono::Utc::now().to_rfc3339(),
+                    is_active: cached_profile.is_active,
+                    email_verified: cached_profile.email_verified,
+                    created_at: cached_profile.created_at.clone(),
+                    updated_at: cached_profile.updated_at.clone(),
                     phone: cached_profile.phone.clone(),
                     company: cached_profile.company.clone(),
                     department: cached_profile.department.clone(),
@@ -73,17 +76,17 @@ pub async fn get_cached_profile(cache_key: &str) -> Option<StandardizedUser> {
                         cache.put(cache_key.to_string(), cached_profile.clone());
                     }
                     
-                    // Convert to StandardizedUser
+                    // Convert to StandardizedUser (using actual stored values)
                     return Some(StandardizedUser {
                         _id: cached_profile.id.clone(),
                         id: cached_profile.id.clone(),
                         email: cached_profile.email.clone(),
                         name: cached_profile.name.clone(),
                         role: cached_profile.role.clone(),
-                        is_active: true,
-                        email_verified: true,
-                        created_at: chrono::Utc::now().to_rfc3339(),
-                        updated_at: chrono::Utc::now().to_rfc3339(),
+                        is_active: cached_profile.is_active,
+                        email_verified: cached_profile.email_verified,
+                        created_at: cached_profile.created_at.clone(),
+                        updated_at: cached_profile.updated_at.clone(),
                         phone: cached_profile.phone.clone(),
                         company: cached_profile.company.clone(),
                         department: cached_profile.department.clone(),
@@ -108,6 +111,10 @@ pub async fn cache_profile(cache_key: &str, user: &StandardizedUser, ttl: u64) -
         email: user.email.clone(),
         name: user.name.clone(),
         role: user.role.clone(),
+        is_active: user.is_active,
+        email_verified: user.email_verified,
+        created_at: user.created_at.clone(),
+        updated_at: user.updated_at.clone(),
         profile_picture: user.profile_picture.clone(),
         use_gravatar: user.use_gravatar,
         location: user.location.clone(),

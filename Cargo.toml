@@ -7,6 +7,10 @@ edition = "2021"
 name = "user-service"
 path = "src/main.rs"
 
+[lib]
+name = "user_service"
+path = "src/lib.rs"
+
 [dependencies]
 # Web framework
 actix-web = "4.8"
@@ -60,3 +64,4 @@ thiserror = "1.0"
 
 [dev-dependencies]
 tokio-test = "0.4"
+bcrypt = "0.15"
