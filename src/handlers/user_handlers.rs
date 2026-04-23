@@ -6,12 +6,12 @@ use bcrypt::{hash, verify as bcrypt_verify};
 use validator::Validate;
 
 use crate::models::user::{
-    UserProfileResponse, StandardizedUser, SettingsResponse, UserSettings,
-    SettingsUpdateRequest, ProfilePictureResponse, UserBasicInfo,
+    UserProfileResponse, SettingsResponse, UserSettings,
+    SettingsUpdateRequest, ProfilePictureResponse,
     PasswordChangeRequest, PasswordChangeResponse, UserSearchQuery,
-    UserSearchResponse, PaginationInfo, AdminUserUpdateRequest,
-    UserRolesResponse, RoleInfo, RoleUpdateRequest,
-    UserActivityResponse, ActivityLog, ActivityQuery,
+    UserSearchResponse, AdminUserUpdateRequest,
+    UserRolesResponse, RoleUpdateRequest,
+    UserActivityResponse, ActivityQuery,
     DataExportResponse, UserDataExport, DataImportRequest, DataImportResponse
 };
 use crate::models::response::{ErrorResponse, SuccessResponse};
@@ -22,20 +22,18 @@ use crate::services::cache_service::{
 use crate::services::google_drive_service::upload_profile_picture;
 use crate::middleware::auth::extract_claims_from_request;
 use crate::get_database;
-use crate::utils::security::{generate_secure_password, validate_email, escape_regex};
+use crate::utils::security::{generate_secure_password, validate_email};
 
-/// Helper: extract _id from a BSON document, returning an HTTP 500 error on failure.
-fn extract_doc_id(doc: &mongodb::bson::Document) -> std::result::Result<String, HttpResponse> {
-    doc.get_object_id("_id")
-        .map(|oid| oid.to_hex())
-        .map_err(|_| {
-            log::error!("Document missing valid _id field");
-            HttpResponse::InternalServerError().json(ErrorResponse {
-                success: false,
-                error: "Internal error: malformed document".to_string(),
-            })
-        })
-}
+use super::helpers::{
+    standardize_user_doc, standardize_activity_doc, extract_user_basic_info,
+    is_admin, determine_target_user_id, get_role_definitions, get_permissions_for_role,
+    parse_pagination, compute_pagination_info,
+    build_search_filter, build_sort_doc, build_admin_lookup_filter,
+    build_activity_filter, build_admin_update_fields, build_settings_success_message,
+    validate_file_size, validate_image_content_type,
+    profile_cache_key, settings_cache_key,
+    collect_validation_errors, parse_object_id,
+};
 
 // Get user profile endpoint (matches Node.js /api/users/profile exactly)
 pub async fn get_profile(req: HttpRequest, query: web::Query<serde_json::Value>) -> Result<HttpResponse> {
@@ -54,17 +52,12 @@ pub async fn get_profile(req: HttpRequest, query: web::Query<serde_json::Value>)
     let user_id = query.get("userId").and_then(|v| v.as_str());
 
     // Determine target user (admin can lookup any user, regular users only themselves)
-    let target_user_id = if (user_id.is_some() || email.is_some()) && 
-                            (claims.role == "admin" || claims.role_type == "admin") {
-        // Admin lookup by userId (preferred) or email (legacy)
-        user_id.unwrap_or_else(|| email.unwrap_or(&claims.user_id)).to_string()
-    } else {
-        // Regular user can only see their own profile
-        claims.user_id.clone()
-    };
+    let target_user_id = determine_target_user_id(
+        user_id, email, &claims.user_id, &claims.role, &claims.role_type,
+    );
 
     // Try cache first (15-minute cache like Node.js)
-    let cache_key = format!("user:profile:{}", target_user_id);
+    let cache_key = profile_cache_key(&target_user_id);
     
     if let Some(cached_profile) = get_cached_profile(&cache_key).await {
         log::info!("📦 Cache HIT for user profile: {}", target_user_id);
@@ -92,30 +85,14 @@ pub async fn get_profile(req: HttpRequest, query: web::Query<serde_json::Value>)
     let users_collection = db.collection::<mongodb::bson::Document>("users");
 
     // Find user (admin lookup logic matches Node.js exactly)
-    let user = if (user_id.is_some() || email.is_some()) && 
-                  (claims.role == "admin" || claims.role_type == "admin") {
-        
-        let filter = if let Some(uid) = user_id {
-            match ObjectId::parse_str(uid) {
-                Ok(oid) => doc! { "_id": oid },
-                Err(_) => {
-                    return Ok(HttpResponse::BadRequest().json(ErrorResponse {
-                        success: false,
-                        error: "Invalid user ID format".to_string(),
-                    }));
-                }
-            }
-        } else if let Some(em) = email {
-            doc! { "email": em }
-        } else {
-            match ObjectId::parse_str(&claims.user_id) {
-                Ok(oid) => doc! { "_id": oid },
-                Err(_) => {
-                    return Ok(HttpResponse::BadRequest().json(ErrorResponse {
-                        success: false,
-                        error: "Invalid user ID format".to_string(),
-                    }));
-                }
+    let user = if (user_id.is_some() || email.is_some()) && is_admin(&claims.role, &claims.role_type) {
+        let filter = match build_admin_lookup_filter(user_id, email, &claims.user_id) {
+            Ok(f) => f,
+            Err(e) => {
+                return Ok(HttpResponse::BadRequest().json(ErrorResponse {
+                    success: false,
+                    error: e,
+                }));
             }
         };
 
@@ -127,22 +104,21 @@ pub async fn get_profile(req: HttpRequest, query: web::Query<serde_json::Value>)
         ).await.unwrap_or(None)
     } else {
         // Regular user can only see their own profile
-        match ObjectId::parse_str(&claims.user_id) {
-            Ok(oid) => {
-                users_collection.find_one(
-                    doc! { "_id": oid },
-                    mongodb::options::FindOneOptions::builder()
-                        .projection(doc! { "password": 0, "resetToken": 0, "resetTokenExpiry": 0 })
-                        .build()
-                ).await.unwrap_or(None)
-            }
-            Err(_) => {
+        let oid = match parse_object_id(&claims.user_id) {
+            Ok(oid) => oid,
+            Err(e) => {
                 return Ok(HttpResponse::BadRequest().json(ErrorResponse {
                     success: false,
-                    error: "Invalid user ID format".to_string(),
+                    error: e,
                 }));
             }
-        }
+        };
+        users_collection.find_one(
+            doc! { "_id": oid },
+            mongodb::options::FindOneOptions::builder()
+                .projection(doc! { "password": 0, "resetToken": 0, "resetTokenExpiry": 0 })
+                .build()
+        ).await.unwrap_or(None)
     };
 
     let user = match user {
@@ -156,32 +132,15 @@ pub async fn get_profile(req: HttpRequest, query: web::Query<serde_json::Value>)
     };
 
     // Transform to standardized format (following UserUtils.fromDatabase from Node.js)
-    let user_id_str = match extract_doc_id(&user) {
-        Ok(id) => id,
-        Err(resp) => return Ok(resp),
-    };
-    let standardized_user = StandardizedUser {
-        _id: user_id_str.clone(),
-        id: user_id_str.clone(),
-        email: user.get_str("email").unwrap_or("").to_string(),
-        name: user.get_str("name").unwrap_or("").to_string(),
-        role: user.get_str("role").unwrap_or("customer").to_string(),
-        is_active: user.get_bool("isActive").unwrap_or(true),
-        email_verified: user.get_bool("emailVerified").unwrap_or(false),
-        created_at: user.get_datetime("createdAt")
-            .map(|dt| dt.try_to_rfc3339_string().unwrap_or_default())
-            .unwrap_or_else(|_| chrono::Utc::now().to_rfc3339()),
-        updated_at: user.get_datetime("updatedAt")
-            .map(|dt| dt.try_to_rfc3339_string().unwrap_or_default())
-            .unwrap_or_else(|_| chrono::Utc::now().to_rfc3339()),
-        phone: user.get_str("phone").ok().map(|s| s.to_string()),
-        company: user.get_str("company").ok().map(|s| s.to_string()),
-        department: user.get_str("department").ok().map(|s| s.to_string()),
-        position: user.get_str("position").ok().map(|s| s.to_string()),
-        username: user.get_str("username").ok().map(|s| s.to_string()),
-        profile_picture: user.get_str("profilePicture").ok().map(|s| s.to_string()),
-        use_gravatar: user.get_bool("useGravatar").ok(),
-        location: user.get_str("location").ok().map(|s| s.to_string()),
+    let standardized_user = match standardize_user_doc(&user) {
+        Ok(u) => u,
+        Err(_) => {
+            log::error!("Document missing valid _id field");
+            return Ok(HttpResponse::InternalServerError().json(ErrorResponse {
+                success: false,
+                error: "Internal error: malformed document".to_string(),
+            }));
+        }
     };
 
     // Cache the result for 15 minutes (900 seconds) like Node.js
@@ -209,7 +168,7 @@ pub async fn get_settings(req: HttpRequest) -> Result<HttpResponse> {
     };
 
     // Generate cache key for user settings
-    let cache_key = format!("user:settings:{}", claims.user_id);
+    let cache_key = settings_cache_key(&claims.user_id);
     
     // Try cache first (30-minute cache like Node.js)
     if let Some(cached_settings) = get_cached_settings(&cache_key).await {
@@ -277,19 +236,17 @@ pub async fn get_settings(req: HttpRequest) -> Result<HttpResponse> {
     };
 
     let mut response_settings = settings;
-    let settings_user_id = match extract_doc_id(&user) {
-        Ok(id) => id,
-        Err(resp) => return Ok(resp),
+    let user_info = match extract_user_basic_info(&user) {
+        Ok(info) => info,
+        Err(_) => {
+            log::error!("Document missing valid _id field");
+            return Ok(HttpResponse::InternalServerError().json(ErrorResponse {
+                success: false,
+                error: "Internal error: malformed document".to_string(),
+            }));
+        }
     };
-    response_settings.user = Some(UserBasicInfo {
-        _id: settings_user_id,
-        email: user.get_str("email").unwrap_or("").to_string(),
-        name: user.get_str("name").unwrap_or("").to_string(),
-        role: user.get_str("role").unwrap_or("customer").to_string(),
-        profile_picture: user.get_str("profilePicture").ok().map(|s| s.to_string()),
-        use_gravatar: user.get_bool("useGravatar").ok(),
-        location: user.get_str("location").ok().map(|s| s.to_string()),
-    });
+    response_settings.user = Some(user_info);
 
     let response_data = SettingsResponse {
         success: true,
@@ -308,15 +265,9 @@ pub async fn get_settings(req: HttpRequest) -> Result<HttpResponse> {
 pub async fn update_settings(req: HttpRequest, body: web::Json<SettingsUpdateRequest>) -> Result<HttpResponse> {
     // Validate input data
     if let Err(validation_errors) = body.validate() {
-        let error_messages: Vec<String> = validation_errors
-            .field_errors()
-            .values()
-            .flat_map(|errors| errors.iter().map(|e| e.message.as_ref().unwrap_or(&"Validation error".into()).to_string()))
-            .collect();
-        
         return Ok(HttpResponse::BadRequest().json(ErrorResponse {
             success: false,
-            error: error_messages.join(", "),
+            error: collect_validation_errors(&validation_errors),
         }));
     }
 
@@ -490,24 +441,14 @@ pub async fn update_settings(req: HttpRequest, body: web::Json<SettingsUpdateReq
     }
 
     // Invalidate cached settings for this user
-    let cache_key = format!("user:settings:{}", claims.user_id);
+    let cache_key = settings_cache_key(&claims.user_id);
     let _ = invalidate_settings_cache(&cache_key).await;
     log::info!("🗑️ Invalidated settings cache for user: {}", claims.user_id);
 
     // Build success message (matches Node.js logic)
-    let mut success_message = "Settings updated successfully".to_string();
-    if let Some(account_changes) = &body.account_changes {
-        let mut changes = Vec::new();
-        if account_changes.new_email.is_some() {
-            changes.push("email");
-        }
-        if account_changes.new_password.is_some() {
-            changes.push("password");
-        }
-        if !changes.is_empty() {
-            success_message.push_str(&format!(". {} updated.", changes.join(" and ")));
-        }
-    }
+    let email_changed = body.account_changes.as_ref().is_some_and(|ac| ac.new_email.is_some());
+    let password_changed = body.account_changes.as_ref().is_some_and(|ac| ac.new_password.is_some());
+    let success_message = build_settings_success_message(email_changed, password_changed);
 
     Ok(HttpResponse::Ok().json(SuccessResponse {
         success: true,
@@ -545,10 +486,10 @@ pub async fn update_profile_picture(req: HttpRequest, mut payload: Multipart) ->
             }
             
             // Validate file size (5MB max, same as Node.js)
-            if data.len() > 5 * 1024 * 1024 {
+            if let Err(e) = validate_file_size(data.len(), 5 * 1024 * 1024) {
                 return Ok(HttpResponse::BadRequest().json(ErrorResponse {
                     success: false,
-                    error: "File size too large. Maximum size is 5MB.".to_string(),
+                    error: e,
                 }));
             }
 
@@ -574,13 +515,11 @@ pub async fn update_profile_picture(req: HttpRequest, mut payload: Multipart) ->
     };
 
     // Validate content type (only images allowed, same as Node.js)
-    if let Some(ct) = &content_type {
-        if !ct.starts_with("image/") {
-            return Ok(HttpResponse::BadRequest().json(ErrorResponse {
-                success: false,
-                error: "Only image files are allowed".to_string(),
-            }));
-        }
+    if let Err(e) = validate_image_content_type(content_type.as_deref()) {
+        return Ok(HttpResponse::BadRequest().json(ErrorResponse {
+            success: false,
+            error: e,
+        }));
     }
 
     log::info!("File received: {} {} bytes", file_name, file_data.len());
@@ -686,7 +625,7 @@ pub async fn update_profile_picture(req: HttpRequest, mut payload: Multipart) ->
     }
 
     // Bust cache for this user since they uploaded a new photo
-    let cache_key = format!("user:profile:{}", claims.user_id);
+    let cache_key = profile_cache_key(&claims.user_id);
     let _ = invalidate_profile_cache(&cache_key).await;
     log::info!("🗑️ Invalidated profile cache for user: {}", claims.user_id);
 
@@ -701,15 +640,9 @@ pub async fn update_profile_picture(req: HttpRequest, mut payload: Multipart) ->
 pub async fn change_password(req: HttpRequest, body: web::Json<PasswordChangeRequest>) -> Result<HttpResponse> {
     // Validate input data
     if let Err(validation_errors) = body.validate() {
-        let error_messages: Vec<String> = validation_errors
-            .field_errors()
-            .values()
-            .flat_map(|errors| errors.iter().map(|e| e.message.as_ref().unwrap_or(&"Validation error".into()).to_string()))
-            .collect();
-        
         return Ok(HttpResponse::BadRequest().json(ErrorResponse {
             success: false,
-            error: error_messages.join(", "),
+            error: collect_validation_errors(&validation_errors),
         }));
     }
 
@@ -906,7 +839,7 @@ pub async fn delete_avatar(req: HttpRequest) -> Result<HttpResponse> {
     }
 
     // Bust cache for this user since they deleted their avatar
-    let cache_key = format!("user:profile:{}", claims.user_id);
+    let cache_key = profile_cache_key(&claims.user_id);
     let _ = invalidate_profile_cache(&cache_key).await;
     log::info!("🗑️ Invalidated profile cache for user: {} (avatar deleted)", claims.user_id);
 
@@ -930,7 +863,7 @@ pub async fn admin_search_users(req: HttpRequest, query: web::Query<UserSearchQu
     };
 
     // Check admin permissions
-    if claims.role != "admin" && claims.role_type != "admin" {
+    if !is_admin(&claims.role, &claims.role_type) {
         return Ok(HttpResponse::Forbidden().json(ErrorResponse {
             success: false,
             error: "Admin access required".to_string(),
@@ -938,9 +871,7 @@ pub async fn admin_search_users(req: HttpRequest, query: web::Query<UserSearchQu
     }
 
     // Parse pagination parameters
-    let page = query.page.unwrap_or(1).max(1);
-    let limit = query.limit.unwrap_or(10).clamp(1, 100); // Max 100 per page
-    let skip = (page - 1) * limit;
+    let (page, limit, skip) = parse_pagination(query.page, query.limit, 10, 100);
 
     // Connect to MongoDB
     let db = match get_database().await {
@@ -957,44 +888,20 @@ pub async fn admin_search_users(req: HttpRequest, query: web::Query<UserSearchQu
     let users_collection = db.collection::<mongodb::bson::Document>("users");
 
     // Build search filter
-    let mut filter = doc! {};
-    
-    // Search by query string (name or email) — escape regex metacharacters to prevent injection
-    if let Some(q) = &query.q {
-        if !q.trim().is_empty() {
-            let escaped_q = escape_regex(q);
-            filter.insert("$or", vec![
-                doc! { "name": { "$regex": &escaped_q, "$options": "i" } },
-                doc! { "email": { "$regex": &escaped_q, "$options": "i" } }
-            ]);
-        }
-    }
-
-    // Filter by role
-    if let Some(role) = &query.role {
-        if !role.trim().is_empty() {
-            filter.insert("role", role);
-        }
-    }
+    let filter = build_search_filter(query.q.as_deref(), query.role.as_deref());
 
     // Build sort criteria
-    let sort_field = query.sort.as_deref().unwrap_or("createdAt");
-    let sort_order = match query.order.as_deref() {
-        Some("asc") => 1,
-        _ => -1, // Default to descending
-    };
-    let sort_doc = doc! { sort_field: sort_order };
+    let sort_doc = build_sort_doc(query.sort.as_deref(), query.order.as_deref());
 
     // Get total count for pagination
     let total = users_collection.count_documents(filter.clone(), None).await.unwrap_or(0);
-    let total_pages = ((total as f64) / (limit as f64)).ceil() as u32;
 
     // Execute search with pagination
     let mut cursor = users_collection
         .find(filter, mongodb::options::FindOptions::builder()
             .projection(doc! { "password": 0, "resetToken": 0, "resetTokenExpiry": 0 })
             .sort(sort_doc)
-            .skip(skip as u64)
+            .skip(skip)
             .limit(limit as i64)
             .build())
         .await
@@ -1006,46 +913,14 @@ pub async fn admin_search_users(req: HttpRequest, query: web::Query<UserSearchQu
     let mut users = Vec::new();
     while let Some(user_doc) = cursor.try_next().await.unwrap_or(None) {
         // Transform to standardized format — skip docs with missing _id
-        let user_id_str = match extract_doc_id(&user_doc) {
-            Ok(id) => id,
-            Err(_) => continue,
-        };
-        let standardized_user = StandardizedUser {
-            _id: user_id_str.clone(),
-            id: user_id_str.clone(),
-            email: user_doc.get_str("email").unwrap_or("").to_string(),
-            name: user_doc.get_str("name").unwrap_or("").to_string(),
-            role: user_doc.get_str("role").unwrap_or("customer").to_string(),
-            is_active: user_doc.get_bool("isActive").unwrap_or(true),
-            email_verified: user_doc.get_bool("emailVerified").unwrap_or(false),
-            created_at: user_doc.get_datetime("createdAt")
-                .map(|dt| dt.try_to_rfc3339_string().unwrap_or_default())
-                .unwrap_or_else(|_| chrono::Utc::now().to_rfc3339()),
-            updated_at: user_doc.get_datetime("updatedAt")
-                .map(|dt| dt.try_to_rfc3339_string().unwrap_or_default())
-                .unwrap_or_else(|_| chrono::Utc::now().to_rfc3339()),
-            phone: user_doc.get_str("phone").ok().map(|s| s.to_string()),
-            company: user_doc.get_str("company").ok().map(|s| s.to_string()),
-            department: user_doc.get_str("department").ok().map(|s| s.to_string()),
-            position: user_doc.get_str("position").ok().map(|s| s.to_string()),
-            username: user_doc.get_str("username").ok().map(|s| s.to_string()),
-            profile_picture: user_doc.get_str("profilePicture").ok().map(|s| s.to_string()),
-            use_gravatar: user_doc.get_bool("useGravatar").ok(),
-            location: user_doc.get_str("location").ok().map(|s| s.to_string()),
-        };
-        users.push(standardized_user);
+        if let Ok(standardized_user) = standardize_user_doc(&user_doc) {
+            users.push(standardized_user);
+        }
     }
 
-    let pagination = PaginationInfo {
-        page,
-        limit,
-        total,
-        total_pages,
-        has_next: page < total_pages,
-        has_prev: page > 1,
-    };
+    let pagination = compute_pagination_info(page, limit, total);
 
-    log::info!("Admin user search completed: {} users found (page {}/{})", users.len(), page, total_pages);
+    log::info!("Admin user search completed: {} users found (page {}/{})", users.len(), page, pagination.total_pages);
 
     Ok(HttpResponse::Ok().json(UserSearchResponse {
         success: true,
@@ -1059,15 +934,9 @@ pub async fn admin_search_users(req: HttpRequest, query: web::Query<UserSearchQu
 pub async fn admin_update_user(req: HttpRequest, path: web::Path<String>, body: web::Json<AdminUserUpdateRequest>) -> Result<HttpResponse> {
     // Validate input data
     if let Err(validation_errors) = body.validate() {
-        let error_messages: Vec<String> = validation_errors
-            .field_errors()
-            .values()
-            .flat_map(|errors| errors.iter().map(|e| e.message.as_ref().unwrap_or(&"Validation error".into()).to_string()))
-            .collect();
-        
         return Ok(HttpResponse::BadRequest().json(ErrorResponse {
             success: false,
-            error: error_messages.join(", "),
+            error: collect_validation_errors(&validation_errors),
         }));
     }
 
@@ -1083,7 +952,7 @@ pub async fn admin_update_user(req: HttpRequest, path: web::Path<String>, body: 
     };
 
     // Check admin permissions
-    if claims.role != "admin" && claims.role_type != "admin" {
+    if !is_admin(&claims.role, &claims.role_type) {
         return Ok(HttpResponse::Forbidden().json(ErrorResponse {
             success: false,
             error: "Admin access required".to_string(),
@@ -1135,28 +1004,10 @@ pub async fn admin_update_user(req: HttpRequest, path: web::Path<String>, body: 
     }
 
     // Build update document
-    let mut update_doc = doc! {
-        "updatedAt": DateTime::now()
-    };
-
-    if let Some(name) = &body.name {
-        update_doc.insert("name", name);
-    }
-    if let Some(email) = &body.email {
-        update_doc.insert("email", email.to_lowercase());
-    }
-    if let Some(role) = &body.role {
-        update_doc.insert("role", role);
-    }
-    if let Some(is_active) = body.is_active {
-        update_doc.insert("isActive", is_active);
-    }
-    if let Some(email_verified) = body.email_verified {
-        update_doc.insert("emailVerified", email_verified);
-    }
+    let update_doc = build_admin_update_fields(&body);
 
     // Update user
-    let result = match ObjectId::parse_str(&user_id) {
+    let result = match parse_object_id(&user_id) {
         Ok(oid) => {
             users_collection.update_one(
                 doc! { "_id": oid },
@@ -1191,7 +1042,7 @@ pub async fn admin_update_user(req: HttpRequest, path: web::Path<String>, body: 
     }
 
     // Invalidate cache for the updated user
-    let cache_key = format!("user:profile:{}", user_id);
+    let cache_key = profile_cache_key(&user_id);
     let _ = invalidate_profile_cache(&cache_key).await;
     log::info!("🗑️ Invalidated profile cache for user: {} (admin update)", user_id);
 
@@ -1217,51 +1068,11 @@ pub async fn get_user_roles(req: HttpRequest) -> Result<HttpResponse> {
     };
 
     // Define available roles with permissions (matches system roles)
-    let roles = vec![
-        RoleInfo {
-            name: "admin".to_string(),
-            description: "Full system access with administrative privileges".to_string(),
-            permissions: vec![
-                "read".to_string(),
-                "write".to_string(),
-                "delete".to_string(),
-                "admin".to_string(),
-                "user_management".to_string(),
-                "system_settings".to_string(),
-            ],
-        },
-        RoleInfo {
-            name: "customer".to_string(),
-            description: "Regular user with standard access".to_string(),
-            permissions: vec![
-                "read".to_string(),
-                "write".to_string(),
-                "profile_edit".to_string(),
-            ],
-        },
-        RoleInfo {
-            name: "editor".to_string(),
-            description: "Content editor with enhanced permissions".to_string(),
-            permissions: vec![
-                "read".to_string(),
-                "write".to_string(),
-                "content_edit".to_string(),
-                "profile_edit".to_string(),
-            ],
-        },
-        RoleInfo {
-            name: "subscriber".to_string(),
-            description: "Read-only access for subscribers".to_string(),
-            permissions: vec!["read".to_string()],
-        },
-    ];
+    let roles = get_role_definitions();
 
     // Get current user's role permissions
     let current_role = claims.role.clone();
-    let permissions = roles
-        .iter()
-        .find(|r| r.name == current_role)
-        .map(|r| r.permissions.clone());
+    let permissions = get_permissions_for_role(&current_role);
 
     Ok(HttpResponse::Ok().json(UserRolesResponse {
         success: true,
@@ -1276,15 +1087,9 @@ pub async fn get_user_roles(req: HttpRequest) -> Result<HttpResponse> {
 pub async fn update_user_role(req: HttpRequest, body: web::Json<RoleUpdateRequest>) -> Result<HttpResponse> {
     // Validate input data
     if let Err(validation_errors) = body.validate() {
-        let error_messages: Vec<String> = validation_errors
-            .field_errors()
-            .values()
-            .flat_map(|errors| errors.iter().map(|e| e.message.as_ref().unwrap_or(&"Validation error".into()).to_string()))
-            .collect();
-
         return Ok(HttpResponse::BadRequest().json(ErrorResponse {
             success: false,
-            error: error_messages.join(", "),
+            error: collect_validation_errors(&validation_errors),
         }));
     }
 
@@ -1300,7 +1105,7 @@ pub async fn update_user_role(req: HttpRequest, body: web::Json<RoleUpdateReques
     };
 
     // Check admin permissions (only admins can change roles)
-    if claims.role != "admin" && claims.role_type != "admin" {
+    if !is_admin(&claims.role, &claims.role_type) {
         return Ok(HttpResponse::Forbidden().json(ErrorResponse {
             success: false,
             error: "Admin access required to change user roles".to_string(),
@@ -1362,7 +1167,7 @@ pub async fn update_user_role(req: HttpRequest, body: web::Json<RoleUpdateReques
     }
 
     // Invalidate cache
-    let cache_key = format!("user:profile:{}", claims.user_id);
+    let cache_key = profile_cache_key(&claims.user_id);
     let _ = invalidate_profile_cache(&cache_key).await;
 
     Ok(HttpResponse::Ok().json(SuccessResponse {
@@ -1385,9 +1190,7 @@ pub async fn get_user_activity(req: HttpRequest, query: web::Query<ActivityQuery
     };
 
     // Parse pagination parameters
-    let page = query.page.unwrap_or(1).max(1);
-    let limit = query.limit.unwrap_or(20).clamp(1, 100);
-    let skip = (page - 1) * limit;
+    let (page, limit, skip) = parse_pagination(query.page, query.limit, 20, 100);
 
     // Connect to MongoDB
     let db = match get_database().await {
@@ -1404,45 +1207,21 @@ pub async fn get_user_activity(req: HttpRequest, query: web::Query<ActivityQuery
     let activity_collection = db.collection::<mongodb::bson::Document>("user_activities");
 
     // Build activity filter
-    let mut filter = doc! { "user_id": &claims.user_id };
-
-    // Filter by action type
-    if let Some(action) = &query.action {
-        if !action.trim().is_empty() {
-            filter.insert("action", action);
-        }
-    }
-
-    // Filter by date range
-    if query.start_date.is_some() || query.end_date.is_some() {
-        let mut date_filter = doc! {};
-
-        if let Some(start_date) = &query.start_date {
-            if let Ok(start_dt) = chrono::DateTime::parse_from_rfc3339(start_date) {
-                date_filter.insert("$gte", DateTime::from_millis(start_dt.timestamp_millis()));
-            }
-        }
-
-        if let Some(end_date) = &query.end_date {
-            if let Ok(end_dt) = chrono::DateTime::parse_from_rfc3339(end_date) {
-                date_filter.insert("$lte", DateTime::from_millis(end_dt.timestamp_millis()));
-            }
-        }
-
-        if !date_filter.is_empty() {
-            filter.insert("timestamp", date_filter);
-        }
-    }
+    let filter = build_activity_filter(
+        &claims.user_id,
+        query.action.as_deref(),
+        query.start_date.as_deref(),
+        query.end_date.as_deref(),
+    );
 
     // Get total count for pagination
     let total = activity_collection.count_documents(filter.clone(), None).await.unwrap_or(0);
-    let total_pages = ((total as f64) / (limit as f64)).ceil() as u32;
 
     // Execute query with pagination
     let mut cursor = activity_collection
         .find(filter, mongodb::options::FindOptions::builder()
             .sort(doc! { "timestamp": -1 })
-            .skip(skip as u64)
+            .skip(skip)
             .limit(limit as i64)
             .build())
         .await
@@ -1453,36 +1232,12 @@ pub async fn get_user_activity(req: HttpRequest, query: web::Query<ActivityQuery
 
     let mut activities = Vec::new();
     while let Some(activity_doc) = cursor.try_next().await.unwrap_or(None) {
-        let activity_id = match extract_doc_id(&activity_doc) {
-            Ok(id) => id,
-            Err(_) => continue,
-        };
-        let activity = ActivityLog {
-            id: activity_id,
-            user_id: activity_doc.get_str("user_id").unwrap_or("").to_string(),
-            action: activity_doc.get_str("action").unwrap_or("").to_string(),
-            resource: activity_doc.get_str("resource").ok().map(|s| s.to_string()),
-            resource_id: activity_doc.get_str("resource_id").ok().map(|s| s.to_string()),
-            ip_address: activity_doc.get_str("ip_address").ok().map(|s| s.to_string()),
-            user_agent: activity_doc.get_str("user_agent").ok().map(|s| s.to_string()),
-            timestamp: activity_doc.get_datetime("timestamp")
-                .map(|dt| dt.try_to_rfc3339_string().unwrap_or_default())
-                .unwrap_or_else(|_| chrono::Utc::now().to_rfc3339()),
-            metadata: activity_doc.get_document("metadata").ok().and_then(|d| {
-                serde_json::from_str(&d.to_string()).ok()
-            }),
-        };
-        activities.push(activity);
+        if let Ok(activity) = standardize_activity_doc(&activity_doc) {
+            activities.push(activity);
+        }
     }
 
-    let pagination = PaginationInfo {
-        page,
-        limit,
-        total,
-        total_pages,
-        has_next: page < total_pages,
-        has_prev: page > 1,
-    };
+    let pagination = compute_pagination_info(page, limit, total);
 
     log::info!("Retrieved {} activities for user: {}", activities.len(), claims.user_id);
 
@@ -1551,32 +1306,15 @@ pub async fn export_user_data(req: HttpRequest) -> Result<HttpResponse> {
     };
 
     // Transform user to standardized format
-    let user_id_str = match extract_doc_id(&user) {
-        Ok(id) => id,
-        Err(resp) => return Ok(resp),
-    };
-    let standardized_user = StandardizedUser {
-        _id: user_id_str.clone(),
-        id: user_id_str.clone(),
-        email: user.get_str("email").unwrap_or("").to_string(),
-        name: user.get_str("name").unwrap_or("").to_string(),
-        role: user.get_str("role").unwrap_or("customer").to_string(),
-        is_active: user.get_bool("isActive").unwrap_or(true),
-        email_verified: user.get_bool("emailVerified").unwrap_or(false),
-        created_at: user.get_datetime("createdAt")
-            .map(|dt| dt.try_to_rfc3339_string().unwrap_or_default())
-            .unwrap_or_else(|_| chrono::Utc::now().to_rfc3339()),
-        updated_at: user.get_datetime("updatedAt")
-            .map(|dt| dt.try_to_rfc3339_string().unwrap_or_default())
-            .unwrap_or_else(|_| chrono::Utc::now().to_rfc3339()),
-        phone: user.get_str("phone").ok().map(|s| s.to_string()),
-        company: user.get_str("company").ok().map(|s| s.to_string()),
-        department: user.get_str("department").ok().map(|s| s.to_string()),
-        position: user.get_str("position").ok().map(|s| s.to_string()),
-        username: user.get_str("username").ok().map(|s| s.to_string()),
-        profile_picture: user.get_str("profilePicture").ok().map(|s| s.to_string()),
-        use_gravatar: user.get_bool("useGravatar").ok(),
-        location: user.get_str("location").ok().map(|s| s.to_string()),
+    let standardized_user = match standardize_user_doc(&user) {
+        Ok(u) => u,
+        Err(_) => {
+            log::error!("Document missing valid _id field");
+            return Ok(HttpResponse::InternalServerError().json(ErrorResponse {
+                success: false,
+                error: "Internal error: malformed document".to_string(),
+            }));
+        }
     };
 
     // Get user settings
@@ -1603,26 +1341,9 @@ pub async fn export_user_data(req: HttpRequest) -> Result<HttpResponse> {
 
     let mut activities = Vec::new();
     while let Some(activity_doc) = cursor.try_next().await.unwrap_or(None) {
-        let activity_id = match extract_doc_id(&activity_doc) {
-            Ok(id) => id,
-            Err(_) => continue,
-        };
-        let activity = ActivityLog {
-            id: activity_id,
-            user_id: activity_doc.get_str("user_id").unwrap_or("").to_string(),
-            action: activity_doc.get_str("action").unwrap_or("").to_string(),
-            resource: activity_doc.get_str("resource").ok().map(|s| s.to_string()),
-            resource_id: activity_doc.get_str("resource_id").ok().map(|s| s.to_string()),
-            ip_address: activity_doc.get_str("ip_address").ok().map(|s| s.to_string()),
-            user_agent: activity_doc.get_str("user_agent").ok().map(|s| s.to_string()),
-            timestamp: activity_doc.get_datetime("timestamp")
-                .map(|dt| dt.try_to_rfc3339_string().unwrap_or_default())
-                .unwrap_or_else(|_| chrono::Utc::now().to_rfc3339()),
-            metadata: activity_doc.get_document("metadata").ok().and_then(|d| {
-                serde_json::from_str(&d.to_string()).ok()
-            }),
-        };
-        activities.push(activity);
+        if let Ok(activity) = standardize_activity_doc(&activity_doc) {
+            activities.push(activity);
+        }
     }
 
     let export_data = UserDataExport {
@@ -1656,7 +1377,7 @@ pub async fn import_user_data(req: HttpRequest, body: web::Json<DataImportReques
     };
 
     // Check admin permissions
-    if claims.role != "admin" && claims.role_type != "admin" {
+    if !is_admin(&claims.role, &claims.role_type) {
         return Ok(HttpResponse::Forbidden().json(ErrorResponse {
             success: false,
             error: "Admin access required for data import".to_string(),

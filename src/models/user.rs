@@ -33,7 +33,7 @@ pub struct UserProfileResponse {
 }
 
 // Standardized user format (following UserUtils.fromDatabase pattern from Node.js)
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct StandardizedUser {
     pub _id: String,
     pub id: String,
