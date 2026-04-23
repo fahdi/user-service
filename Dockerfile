@@ -14,10 +14,10 @@ WORKDIR /app
 # Copy Cargo files first for better caching
 COPY Cargo.toml Cargo.lock ./
 
-# Create a dummy main.rs to build dependencies
-RUN mkdir src && echo "fn main() {}" > src/main.rs
+# Create dummy source files to build dependencies
+RUN mkdir src && echo "fn main() {}" > src/main.rs && echo "pub fn lib_placeholder() {}" > src/lib.rs
 RUN cargo build --release
-RUN rm src/main.rs
+RUN rm -rf src target/release/deps/user_service* target/release/deps/libuser_service* target/release/user-service target/release/.fingerprint/user-service*
 
 # Copy source code
 COPY src ./src
