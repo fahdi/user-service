@@ -1,5 +1,5 @@
 # Multi-stage Dockerfile for user-service (following auth-service patterns)
-FROM rust:1.88-slim as builder
+FROM rust:1.95-slim as builder
 
 # Install system dependencies for building
 RUN apt-get update && apt-get install -y \
