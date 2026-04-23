@@ -14,6 +14,7 @@ mod middleware;
 mod models;
 mod services;
 mod utils;
+mod traits;
 
 use handlers::user_handlers::{
     get_profile, update_profile_picture, get_settings, update_settings, change_password, delete_avatar,

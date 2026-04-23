@@ -20,6 +20,9 @@ actix-multipart = "0.7"
 tokio = { version = "1.0", features = ["full"] }
 futures-util = "0.3"
 
+# Async traits for DI
+async-trait = "0.1"
+
 # Serialization
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
@@ -65,3 +68,4 @@ thiserror = "1.0"
 [dev-dependencies]
 tokio-test = "0.4"
 bcrypt = "0.15"
+mockall = "0.13"
