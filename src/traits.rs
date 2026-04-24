@@ -3,8 +3,6 @@
 //! These traits decouple handler logic from concrete MongoDB, Redis, and
 //! external-service implementations so the handlers can be tested with
 //! lightweight mocks.
-//! TODO: Complete mock implementations and handler integration tests.
-#![allow(dead_code)]
 
 use async_trait::async_trait;
 use mongodb::bson::Document;

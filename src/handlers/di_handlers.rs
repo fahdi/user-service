@@ -1,8 +1,8 @@
-//! Refactored handler functions that accept injected dependencies via `AppState`.
+//! Handler functions that accept injected dependencies via `AppState`.
 //!
-//! These are the testable versions of user_handlers.rs functions.
-//! TODO: Wire into routes once trait-based DI is fully integrated.
-#![allow(dead_code)]
+//! These are the production handler implementations using trait-based DI.
+
+
 //! Each handler takes `web::Data<AppState>` instead of calling global singletons.
 
 use actix_web::{web, HttpRequest, HttpResponse, Result};

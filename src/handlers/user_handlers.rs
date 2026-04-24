@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 use actix_web::{web, HttpRequest, HttpResponse, Result};
 use actix_multipart::Multipart;
 use futures_util::TryStreamExt;
