@@ -15,8 +15,9 @@ mod models;
 mod services;
 mod utils;
 mod traits;
+mod impls;
 
-use handlers::user_handlers::{
+use handlers::di_handlers::{
     get_profile, update_profile_picture, get_settings, update_settings, change_password, delete_avatar,
     admin_search_users, admin_update_user, get_user_roles, update_user_role,
     get_user_activity, export_user_data, import_user_data
@@ -168,7 +169,7 @@ async fn create_database_indexes() -> Result<(), Box<dyn std::error::Error>> {
         Ok(result) => {
             log::info!("Successfully created {} user service indexes", result.index_names.len());
             for index_name in result.index_names {
-                log::info!("  ✅ User service index created: {}", index_name);
+                log::info!("  User service index created: {}", index_name);
             }
         }
         Err(e) => {
@@ -214,9 +215,13 @@ async fn main() -> std::io::Result<()> {
         log::info!("User service database indexes configured successfully");
     }
 
-    HttpServer::new(|| {
+    // Build DI-wired AppState with concrete implementations
+    let app_state = web::Data::new(impls::build_app_state());
+
+    HttpServer::new(move || {
         App::new()
             .wrap(Logger::default())
+            .app_data(app_state.clone())
             .route("/health", web::get().to(health))
             .service(
                 web::scope("/api/users")

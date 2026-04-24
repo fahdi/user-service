@@ -1,3 +1,29 @@
+## [1.1.0] - 2026-04-24 - Trait-Based Dependency Injection
+
+### Changed
+- **Handler DI Wiring**: All 13 route handlers now use trait-based dependency injection
+  - Routes in `main.rs` now import from `handlers/di_handlers.rs` (DI-aware handlers)
+  - Handlers accept `web::Data<AppState>` instead of calling global singletons
+  - Old handlers in `handlers/user_handlers.rs` kept as fallback (marked `#[allow(dead_code)]`)
+
+### Added
+- **Concrete Trait Implementations** (`src/impls.rs`):
+  - `MongoUserRepository` — wraps global MongoDB pool, implements `UserRepository` trait
+  - `RedisCacheService` — delegates to existing multi-layer cache, implements `CacheService` trait
+  - `GoogleDriveUploader` — wraps Google Drive service, implements `FileUploader` trait
+  - `JwtAuthExtractor` — wraps JWT middleware, implements `AuthExtractor` trait
+  - `build_app_state()` factory wires all concrete implementations into `AppState`
+- **AppState Wiring**: `main.rs` builds `AppState` at startup and injects via `.app_data()`
+
+### Fixed
+- Cache service error types updated to `Box<dyn Error + Send + Sync>` for trait safety
+- Removed stale `#![allow(dead_code)]` and TODO comments from `traits.rs`
+
+### Technical Details
+- Files changed: `src/main.rs`, `src/impls.rs` (new), `src/traits.rs`, `src/services/cache_service.rs`, `src/handlers/di_handlers.rs`
+- Zero clippy warnings, all 385 tests passing
+- API contract unchanged — all endpoints behave identically
+
 # Changelog
 
 All notable changes to the User Service will be documented in this file.

@@ -16,7 +16,7 @@ lazy_static! {
 }
 
 // Get Redis connection (defined in main.rs)
-async fn get_redis_connection() -> Result<deadpool_redis::Connection, Box<dyn std::error::Error>> {
+async fn get_redis_connection() -> Result<deadpool_redis::Connection, Box<dyn std::error::Error + Send + Sync>> {
     use crate::REDIS_POOL;
 
     // Clone the pool outside the lock scope to avoid holding MutexGuard across await
@@ -105,7 +105,7 @@ pub async fn get_cached_profile(cache_key: &str) -> Option<StandardizedUser> {
 }
 
 // Cache user profile in Redis and LRU (Phase 4 multi-layer caching)
-pub async fn cache_profile(cache_key: &str, user: &StandardizedUser, ttl: u64) -> Result<(), Box<dyn std::error::Error>> {
+pub async fn cache_profile(cache_key: &str, user: &StandardizedUser, ttl: u64) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let cached_profile = CachedUserProfile {
         id: user.id.clone(),
         email: user.email.clone(),
@@ -142,7 +142,7 @@ pub async fn cache_profile(cache_key: &str, user: &StandardizedUser, ttl: u64) -
 }
 
 // Invalidate user profile cache
-pub async fn invalidate_profile_cache(cache_key: &str) -> Result<(), Box<dyn std::error::Error>> {
+pub async fn invalidate_profile_cache(cache_key: &str) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Remove from Redis
     if let Ok(mut conn) = get_redis_connection().await {
         let _: Result<i32, redis::RedisError> = conn.del(cache_key).await;
@@ -182,7 +182,7 @@ pub async fn get_cached_settings(cache_key: &str) -> Option<SettingsResponse> {
 }
 
 // Cache user settings in Redis and LRU (Phase 4 multi-layer caching)
-pub async fn cache_settings(cache_key: &str, settings: &SettingsResponse, ttl: u64) -> Result<(), Box<dyn std::error::Error>> {
+pub async fn cache_settings(cache_key: &str, settings: &SettingsResponse, ttl: u64) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Cache in Redis
     if let Ok(mut conn) = get_redis_connection().await {
         let serialized = serde_json::to_string(settings)?;
@@ -198,7 +198,7 @@ pub async fn cache_settings(cache_key: &str, settings: &SettingsResponse, ttl: u
 }
 
 // Invalidate user settings cache
-pub async fn invalidate_settings_cache(cache_key: &str) -> Result<(), Box<dyn std::error::Error>> {
+pub async fn invalidate_settings_cache(cache_key: &str) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Remove from Redis
     if let Ok(mut conn) = get_redis_connection().await {
         let _: Result<i32, redis::RedisError> = conn.del(cache_key).await;
