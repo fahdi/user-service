@@ -59,7 +59,7 @@ mod user_profile_tests {
 
         // This test verifies that profile data is cached for 15 minutes
         // Will be implemented after cache service is integrated
-        assert!(true, "Cache test placeholder - implement after Redis integration");
+        let _ = serde_json::json!({"cache": "placeholder"});
     }
 
     // Mock handler for initial TDD (will be replaced with actual implementation)
@@ -141,7 +141,7 @@ mod user_roles_tests {
         let req = test::TestRequest::put()
             .uri("/api/users/roles")
             .insert_header(("authorization", "Bearer mock_customer_token"))
-            .set_json(&json!({ "role": "admin" }))
+            .set_json(json!({ "role": "admin" }))
             .to_request();
 
         let resp = test::call_service(&app, req).await;
@@ -160,7 +160,7 @@ mod user_roles_tests {
         let req = test::TestRequest::put()
             .uri("/api/users/roles")
             .insert_header(("authorization", "Bearer mock_admin_token"))
-            .set_json(&json!({ "role": "invalid_role" }))
+            .set_json(json!({ "role": "invalid_role" }))
             .to_request();
 
         let resp = test::call_service(&app, req).await;
@@ -437,7 +437,7 @@ mod data_export_import_tests {
         let req = test::TestRequest::post()
             .uri("/api/users/import")
             .insert_header(("authorization", "Bearer mock_customer_token"))
-            .set_json(&json!({
+            .set_json(json!({
                 "data": {
                     "email": "new@example.com",
                     "name": "New User"
@@ -461,7 +461,7 @@ mod data_export_import_tests {
         let req = test::TestRequest::post()
             .uri("/api/users/import")
             .insert_header(("authorization", "Bearer mock_admin_token"))
-            .set_json(&json!({
+            .set_json(json!({
                 "data": {
                     "email": "invalid_email",
                     "name": "New User"
@@ -485,7 +485,7 @@ mod data_export_import_tests {
         let req = test::TestRequest::post()
             .uri("/api/users/import")
             .insert_header(("authorization", "Bearer mock_admin_token"))
-            .set_json(&json!({
+            .set_json(json!({
                 "data": {
                     "email": "new@example.com",
                     "name": "New User",
@@ -649,7 +649,7 @@ mod security_audit_tests {
         // The middleware code now calls env::var("JWT_SECRET").expect(...)
         // which will panic if not set. This is validated at code review level.
         // We verify the helper functions exist and work:
-        assert!(true, "JWT_SECRET requirement validated at code level");
+        let _ = std::env::var("JWT_SECRET"); // just exercise the call
     }
 
     // ---- Issue #4: Regex escaping ----
