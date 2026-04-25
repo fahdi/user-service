@@ -28,6 +28,22 @@
 
 All notable changes to the User Service will be documented in this file.
 
+## [1.1.0] - 2026-04-24 - Integration Tests & Lib Refactor
+
+### Added
+- **DI integration tests** (`tests/di_integration_tests.rs`): 49 tests covering all 13 endpoints
+  - Mock implementations of UserRepository, CacheService, FileUploader, AuthExtractor
+  - Tests success cases, 401 unauthorized, 403 forbidden, 404 not found, 400 validation
+  - Admin-only endpoints (admin search, admin update, import, role update) reject non-admin users
+  - No real MongoDB or Redis required
+
+### Changed
+- **Refactored lib.rs/main.rs split**: moved all shared modules (handlers, services, middleware,
+  models, utils, traits) and global statics (REDIS_POOL, MONGODB_CLIENT, USER_CACHE) from main.rs
+  to lib.rs so integration tests can access DI handlers through the library crate
+- Fixed clippy warnings in existing test files (assert!(true) placeholders, needless borrows)
+- Total test count: 201 → 345
+
 ## [1.0.0] - 2025-01-07 - Initial Release
 
 ### Added
