@@ -1,3 +1,8 @@
+## 2026-05-31 - Track Cargo.lock for reproducible Docker builds (#138)
+
+### Fixed
+- `Cargo.lock` is now tracked in git (removed from `.gitignore`). Production Docker build was failing with `failed to compute cache key: "/Cargo.lock": not found` because the Dockerfile copies `Cargo.toml Cargo.lock ./` but the lock file was gitignored. For a binary crate, Cargo.lock should always be checked in to guarantee reproducible deployments.
+
 ## [1.1.0] - 2026-04-24 - Trait-Based Dependency Injection
 
 ### Changed
