@@ -2,38 +2,33 @@
 //!
 //! These are the production handler implementations using trait-based DI.
 
-
 //! Each handler takes `web::Data<AppState>` instead of calling global singletons.
 
-use actix_web::{web, HttpRequest, HttpResponse, Result};
 use actix_multipart::Multipart;
+use actix_web::{web, HttpRequest, HttpResponse, Result};
+use bcrypt::{hash, verify as bcrypt_verify};
 use futures_util::TryStreamExt;
 use mongodb::bson::{doc, DateTime};
-use bcrypt::{hash, verify as bcrypt_verify};
 use validator::Validate;
 
-use crate::models::user::{
-    UserProfileResponse, SettingsResponse, UserSettings,
-    SettingsUpdateRequest, ProfilePictureResponse,
-    PasswordChangeRequest, PasswordChangeResponse, UserSearchQuery,
-    UserSearchResponse, AdminUserUpdateRequest,
-    UserRolesResponse, RoleUpdateRequest,
-    UserActivityResponse, ActivityQuery,
-    DataExportResponse, UserDataExport, DataImportRequest, DataImportResponse,
-};
 use crate::models::response::{ErrorResponse, SuccessResponse};
-use crate::utils::security::{generate_secure_password, validate_email};
+use crate::models::user::{
+    ActivityQuery, AdminUserUpdateRequest, DataExportResponse, DataImportRequest,
+    DataImportResponse, PasswordChangeRequest, PasswordChangeResponse, ProfilePictureResponse,
+    RoleUpdateRequest, SettingsResponse, SettingsUpdateRequest, UserActivityResponse,
+    UserDataExport, UserProfileResponse, UserRolesResponse, UserSearchQuery, UserSearchResponse,
+    UserSettings,
+};
 use crate::traits::AppState;
+use crate::utils::security::{generate_secure_password, validate_email};
 
 use super::helpers::{
-    standardize_user_doc, standardize_activity_doc, extract_user_basic_info,
-    is_admin, determine_target_user_id, get_role_definitions, get_permissions_for_role,
-    parse_pagination, compute_pagination_info,
-    build_search_filter, build_sort_doc, build_admin_lookup_filter,
-    build_activity_filter, build_admin_update_fields, build_settings_success_message,
+    build_activity_filter, build_admin_lookup_filter, build_admin_update_fields,
+    build_search_filter, build_settings_success_message, build_sort_doc, collect_validation_errors,
+    compute_pagination_info, determine_target_user_id, extract_user_basic_info,
+    get_permissions_for_role, get_role_definitions, is_admin, parse_object_id, parse_pagination,
+    profile_cache_key, settings_cache_key, standardize_activity_doc, standardize_user_doc,
     validate_file_size, validate_image_content_type,
-    profile_cache_key, settings_cache_key,
-    collect_validation_errors, parse_object_id,
 };
 
 // ============================================================================
@@ -59,7 +54,11 @@ pub async fn get_profile(
     let user_id = query.get("userId").and_then(|v| v.as_str());
 
     let target_user_id = determine_target_user_id(
-        user_id, email, &claims.user_id, &claims.role, &claims.role_type,
+        user_id,
+        email,
+        &claims.user_id,
+        &claims.role,
+        &claims.role_type,
     );
 
     // Try cache first
@@ -74,28 +73,29 @@ pub async fn get_profile(
 
     // Build filter
     let projection = doc! { "password": 0, "resetToken": 0, "resetTokenExpiry": 0 };
-    let filter = if (user_id.is_some() || email.is_some()) && is_admin(&claims.role, &claims.role_type) {
-        match build_admin_lookup_filter(user_id, email, &claims.user_id) {
-            Ok(f) => f,
-            Err(e) => {
-                return Ok(HttpResponse::BadRequest().json(ErrorResponse {
-                    success: false,
-                    error: e,
-                }));
+    let filter =
+        if (user_id.is_some() || email.is_some()) && is_admin(&claims.role, &claims.role_type) {
+            match build_admin_lookup_filter(user_id, email, &claims.user_id) {
+                Ok(f) => f,
+                Err(e) => {
+                    return Ok(HttpResponse::BadRequest().json(ErrorResponse {
+                        success: false,
+                        error: e,
+                    }));
+                }
             }
-        }
-    } else {
-        let oid = match parse_object_id(&claims.user_id) {
-            Ok(oid) => oid,
-            Err(e) => {
-                return Ok(HttpResponse::BadRequest().json(ErrorResponse {
-                    success: false,
-                    error: e,
-                }));
-            }
+        } else {
+            let oid = match parse_object_id(&claims.user_id) {
+                Ok(oid) => oid,
+                Err(e) => {
+                    return Ok(HttpResponse::BadRequest().json(ErrorResponse {
+                        success: false,
+                        error: e,
+                    }));
+                }
+            };
+            doc! { "_id": oid }
         };
-        doc! { "_id": oid }
-    };
 
     let user = match state.repo.find_user(filter, Some(projection)).await {
         Ok(u) => u,
@@ -127,7 +127,10 @@ pub async fn get_profile(
         }
     };
 
-    state.cache.cache_profile(&cache_key, &standardized_user, 900).await;
+    state
+        .cache
+        .cache_profile(&cache_key, &standardized_user, 900)
+        .await;
 
     Ok(HttpResponse::Ok().json(UserProfileResponse {
         success: true,
@@ -140,10 +143,7 @@ pub async fn get_profile(
 // GET /api/users/settings
 // ============================================================================
 
-pub async fn get_settings(
-    req: HttpRequest,
-    state: web::Data<AppState>,
-) -> Result<HttpResponse> {
+pub async fn get_settings(req: HttpRequest, state: web::Data<AppState>) -> Result<HttpResponse> {
     let claims = match state.auth.extract_claims(&req) {
         Ok(c) => c,
         Err(_) => {
@@ -174,7 +174,11 @@ pub async fn get_settings(
         "role": 1, "profilePicture": 1, "useGravatar": 1, "location": 1
     };
 
-    let user = match state.repo.find_user(doc! { "_id": oid }, Some(projection)).await {
+    let user = match state
+        .repo
+        .find_user(doc! { "_id": oid }, Some(projection))
+        .await
+    {
         Ok(u) => u,
         Err(e) => {
             return Ok(HttpResponse::InternalServerError().json(ErrorResponse {
@@ -218,7 +222,10 @@ pub async fn get_settings(
         message: None,
     };
 
-    state.cache.cache_settings(&cache_key, &response_data, 1800).await;
+    state
+        .cache
+        .cache_settings(&cache_key, &response_data, 1800)
+        .await;
 
     Ok(HttpResponse::Ok().json(response_data))
 }
@@ -261,10 +268,14 @@ pub async fn update_settings(
             }
         };
 
-        let current_user = match state.repo.find_user(
-            doc! { "_id": oid },
-            Some(doc! { "password": 1, "email": 1 }),
-        ).await {
+        let current_user = match state
+            .repo
+            .find_user(
+                doc! { "_id": oid },
+                Some(doc! { "password": 1, "email": 1 }),
+            )
+            .await
+        {
             Ok(u) => u,
             Err(e) => {
                 return Ok(HttpResponse::InternalServerError().json(ErrorResponse {
@@ -304,13 +315,17 @@ pub async fn update_settings(
                         }));
                     }
                 };
-                let email_exists = state.repo.find_user(
-                    doc! {
-                        "email": new_email.to_lowercase(),
-                        "_id": { "$ne": current_oid }
-                    },
-                    None,
-                ).await.unwrap_or(None);
+                let email_exists = state
+                    .repo
+                    .find_user(
+                        doc! {
+                            "email": new_email.to_lowercase(),
+                            "_id": { "$ne": current_oid }
+                        },
+                        None,
+                    )
+                    .await
+                    .unwrap_or(None);
 
                 if email_exists.is_some() {
                     return Ok(HttpResponse::BadRequest().json(ErrorResponse {
@@ -366,10 +381,11 @@ pub async fn update_settings(
         }
     };
 
-    match state.repo.update_user(
-        doc! { "_id": oid },
-        doc! { "$set": update_doc },
-    ).await {
+    match state
+        .repo
+        .update_user(doc! { "_id": oid }, doc! { "$set": update_doc })
+        .await
+    {
         Ok(matched) => {
             if matched == 0 {
                 return Ok(HttpResponse::NotFound().json(ErrorResponse {
@@ -389,8 +405,14 @@ pub async fn update_settings(
     let cache_key = settings_cache_key(&claims.user_id);
     state.cache.invalidate_settings_cache(&cache_key).await;
 
-    let email_changed = body.account_changes.as_ref().is_some_and(|ac| ac.new_email.is_some());
-    let password_changed = body.account_changes.as_ref().is_some_and(|ac| ac.new_password.is_some());
+    let email_changed = body
+        .account_changes
+        .as_ref()
+        .is_some_and(|ac| ac.new_email.is_some());
+    let password_changed = body
+        .account_changes
+        .as_ref()
+        .is_some_and(|ac| ac.new_password.is_some());
     let success_message = build_settings_success_message(email_changed, password_changed);
 
     Ok(HttpResponse::Ok().json(SuccessResponse {
@@ -471,10 +493,11 @@ pub async fn update_profile_picture(
         }
     };
 
-    let user = match state.repo.find_user(
-        doc! { "_id": oid },
-        Some(doc! { "email": 1 }),
-    ).await {
+    let user = match state
+        .repo
+        .find_user(doc! { "_id": oid }, Some(doc! { "email": 1 }))
+        .await
+    {
         Ok(u) => u,
         Err(e) => {
             return Ok(HttpResponse::InternalServerError().json(ErrorResponse {
@@ -494,12 +517,16 @@ pub async fn update_profile_picture(
         }
     };
 
-    let profile_picture_url = match state.uploader.upload_profile_picture(
-        &claims.user_id,
-        user.get_str("email").unwrap_or(""),
-        file_data,
-        &file_name,
-    ).await {
+    let profile_picture_url = match state
+        .uploader
+        .upload_profile_picture(
+            &claims.user_id,
+            user.get_str("email").unwrap_or(""),
+            file_data,
+            &file_name,
+        )
+        .await
+    {
         Ok(url) => url,
         Err(_) => {
             return Ok(HttpResponse::InternalServerError().json(ErrorResponse {
@@ -519,16 +546,20 @@ pub async fn update_profile_picture(
         }
     };
 
-    match state.repo.update_user(
-        doc! { "_id": oid2 },
-        doc! {
-            "$set": {
-                "profilePicture": &profile_picture_url,
-                "useGravatar": false,
-                "updatedAt": DateTime::now()
-            }
-        },
-    ).await {
+    match state
+        .repo
+        .update_user(
+            doc! { "_id": oid2 },
+            doc! {
+                "$set": {
+                    "profilePicture": &profile_picture_url,
+                    "useGravatar": false,
+                    "updatedAt": DateTime::now()
+                }
+            },
+        )
+        .await
+    {
         Ok(matched) => {
             if matched == 0 {
                 return Ok(HttpResponse::NotFound().json(ErrorResponse {
@@ -591,10 +622,14 @@ pub async fn change_password(
         }
     };
 
-    let current_user = match state.repo.find_user(
-        doc! { "_id": oid },
-        Some(doc! { "password": 1, "email": 1 }),
-    ).await {
+    let current_user = match state
+        .repo
+        .find_user(
+            doc! { "_id": oid },
+            Some(doc! { "password": 1, "email": 1 }),
+        )
+        .await
+    {
         Ok(u) => u,
         Err(e) => {
             return Ok(HttpResponse::InternalServerError().json(ErrorResponse {
@@ -632,10 +667,14 @@ pub async fn change_password(
         }
     };
 
-    match state.repo.update_user(
-        doc! { "_id": oid },
-        doc! { "$set": { "password": new_password_hash, "updatedAt": DateTime::now() } },
-    ).await {
+    match state
+        .repo
+        .update_user(
+            doc! { "_id": oid },
+            doc! { "$set": { "password": new_password_hash, "updatedAt": DateTime::now() } },
+        )
+        .await
+    {
         Ok(matched) => {
             if matched == 0 {
                 return Ok(HttpResponse::NotFound().json(ErrorResponse {
@@ -662,10 +701,7 @@ pub async fn change_password(
 // DELETE /api/users/avatar
 // ============================================================================
 
-pub async fn delete_avatar(
-    req: HttpRequest,
-    state: web::Data<AppState>,
-) -> Result<HttpResponse> {
+pub async fn delete_avatar(req: HttpRequest, state: web::Data<AppState>) -> Result<HttpResponse> {
     let claims = match state.auth.extract_claims(&req) {
         Ok(c) => c,
         Err(_) => {
@@ -686,13 +722,17 @@ pub async fn delete_avatar(
         }
     };
 
-    match state.repo.update_user(
-        doc! { "_id": oid },
-        doc! {
-            "$set": { "useGravatar": true, "updatedAt": DateTime::now() },
-            "$unset": { "profilePicture": "" }
-        },
-    ).await {
+    match state
+        .repo
+        .update_user(
+            doc! { "_id": oid },
+            doc! {
+                "$set": { "useGravatar": true, "updatedAt": DateTime::now() },
+                "$unset": { "profilePicture": "" }
+            },
+        )
+        .await
+    {
         Ok(matched) => {
             if matched == 0 {
                 return Ok(HttpResponse::NotFound().json(ErrorResponse {
@@ -759,13 +799,17 @@ pub async fn admin_search_users(
         }
     };
 
-    let user_docs = match state.repo.find_users(
-        filter,
-        Some(projection),
-        Some(sort_doc),
-        Some(skip),
-        Some(limit as i64),
-    ).await {
+    let user_docs = match state
+        .repo
+        .find_users(
+            filter,
+            Some(projection),
+            Some(sort_doc),
+            Some(skip),
+            Some(limit as i64),
+        )
+        .await
+    {
         Ok(docs) => docs,
         Err(e) => {
             return Ok(HttpResponse::InternalServerError().json(ErrorResponse {
@@ -837,13 +881,17 @@ pub async fn admin_update_user(
                 }));
             }
         };
-        let email_exists = state.repo.find_user(
-            doc! {
-                "email": new_email.to_lowercase(),
-                "_id": { "$ne": user_id_obj }
-            },
-            None,
-        ).await.unwrap_or(None);
+        let email_exists = state
+            .repo
+            .find_user(
+                doc! {
+                    "email": new_email.to_lowercase(),
+                    "_id": { "$ne": user_id_obj }
+                },
+                None,
+            )
+            .await
+            .unwrap_or(None);
 
         if email_exists.is_some() {
             return Ok(HttpResponse::BadRequest().json(ErrorResponse {
@@ -864,10 +912,11 @@ pub async fn admin_update_user(
         }
     };
 
-    match state.repo.update_user(
-        doc! { "_id": oid },
-        doc! { "$set": update_doc },
-    ).await {
+    match state
+        .repo
+        .update_user(doc! { "_id": oid }, doc! { "$set": update_doc })
+        .await
+    {
         Ok(matched) => {
             if matched == 0 {
                 return Ok(HttpResponse::NotFound().json(ErrorResponse {
@@ -897,10 +946,7 @@ pub async fn admin_update_user(
 // GET /api/users/roles
 // ============================================================================
 
-pub async fn get_user_roles(
-    req: HttpRequest,
-    state: web::Data<AppState>,
-) -> Result<HttpResponse> {
+pub async fn get_user_roles(req: HttpRequest, state: web::Data<AppState>) -> Result<HttpResponse> {
     let claims = match state.auth.extract_claims(&req) {
         Ok(c) => c,
         Err(_) => {
@@ -967,10 +1013,14 @@ pub async fn update_user_role(
         }
     };
 
-    match state.repo.update_user(
-        doc! { "_id": oid },
-        doc! { "$set": { "role": &body.role, "updatedAt": DateTime::now() } },
-    ).await {
+    match state
+        .repo
+        .update_user(
+            doc! { "_id": oid },
+            doc! { "$set": { "role": &body.role, "updatedAt": DateTime::now() } },
+        )
+        .await
+    {
         Ok(matched) => {
             if matched == 0 {
                 return Ok(HttpResponse::NotFound().json(ErrorResponse {
@@ -1024,14 +1074,22 @@ pub async fn get_user_activity(
         query.end_date.as_deref(),
     );
 
-    let total = state.repo.count_activities(filter.clone()).await.unwrap_or(0);
+    let total = state
+        .repo
+        .count_activities(filter.clone())
+        .await
+        .unwrap_or(0);
 
-    let activity_docs = match state.repo.find_activities(
-        filter,
-        Some(doc! { "timestamp": -1 }),
-        Some(skip),
-        Some(limit as i64),
-    ).await {
+    let activity_docs = match state
+        .repo
+        .find_activities(
+            filter,
+            Some(doc! { "timestamp": -1 }),
+            Some(skip),
+            Some(limit as i64),
+        )
+        .await
+    {
         Ok(docs) => docs,
         Err(e) => {
             return Ok(HttpResponse::InternalServerError().json(ErrorResponse {
@@ -1085,7 +1143,11 @@ pub async fn export_user_data(
     };
 
     let projection = doc! { "password": 0, "resetToken": 0, "resetTokenExpiry": 0 };
-    let user = match state.repo.find_user(doc! { "_id": oid }, Some(projection)).await {
+    let user = match state
+        .repo
+        .find_user(doc! { "_id": oid }, Some(projection))
+        .await
+    {
         Ok(u) => u,
         Err(e) => {
             return Ok(HttpResponse::InternalServerError().json(ErrorResponse {
@@ -1121,12 +1183,16 @@ pub async fn export_user_data(
         Some(UserSettings::default())
     };
 
-    let activity_docs = state.repo.find_activities(
-        doc! { "user_id": &claims.user_id },
-        Some(doc! { "timestamp": -1 }),
-        None,
-        Some(100),
-    ).await.unwrap_or_default();
+    let activity_docs = state
+        .repo
+        .find_activities(
+            doc! { "user_id": &claims.user_id },
+            Some(doc! { "timestamp": -1 }),
+            None,
+            Some(100),
+        )
+        .await
+        .unwrap_or_default();
 
     let activities: Vec<_> = activity_docs
         .iter()
@@ -1181,10 +1247,11 @@ pub async fn import_user_data(
         }));
     }
 
-    let existing_user = state.repo.find_user(
-        doc! { "email": body.data.email.to_lowercase() },
-        None,
-    ).await.unwrap_or(None);
+    let existing_user = state
+        .repo
+        .find_user(doc! { "email": body.data.email.to_lowercase() }, None)
+        .await
+        .unwrap_or(None);
 
     if existing_user.is_some() {
         return Ok(HttpResponse::BadRequest().json(DataImportResponse {
@@ -1225,23 +1292,21 @@ pub async fn import_user_data(
     }
 
     match state.repo.insert_user(user_doc).await {
-        Ok(_) => {
-            Ok(HttpResponse::Ok().json(DataImportResponse {
-                success: true,
-                imported_count: 1,
-                failed_count: 0,
-                errors: vec![],
-                message: "User imported successfully. A password reset is required.".to_string(),
-            }))
-        }
-        Err(e) => {
-            Ok(HttpResponse::InternalServerError().json(DataImportResponse {
+        Ok(_) => Ok(HttpResponse::Ok().json(DataImportResponse {
+            success: true,
+            imported_count: 1,
+            failed_count: 0,
+            errors: vec![],
+            message: "User imported successfully. A password reset is required.".to_string(),
+        })),
+        Err(e) => Ok(
+            HttpResponse::InternalServerError().json(DataImportResponse {
                 success: false,
                 imported_count: 0,
                 failed_count: 1,
                 errors: vec![format!("Database error: {}", e)],
                 message: "Import failed".to_string(),
-            }))
-        }
+            }),
+        ),
     }
 }

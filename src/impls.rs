@@ -9,7 +9,7 @@ use mongodb::bson::Document;
 use std::sync::Arc;
 
 use crate::models::auth::Claims;
-use crate::models::user::{StandardizedUser, SettingsResponse};
+use crate::models::user::{SettingsResponse, StandardizedUser};
 use crate::traits::{
     AuthExtractor, CacheService, FileUploader, RepoError, RepoResult, UserRepository,
 };
@@ -96,7 +96,11 @@ impl UserRepository for MongoUserRepository {
             .await
             .map_err(|e| RepoError(e.to_string()))?;
         let mut docs = Vec::new();
-        while let Some(doc) = cursor.try_next().await.map_err(|e| RepoError(e.to_string()))? {
+        while let Some(doc) = cursor
+            .try_next()
+            .await
+            .map_err(|e| RepoError(e.to_string()))?
+        {
             docs.push(doc);
         }
         Ok(docs)
@@ -144,7 +148,11 @@ impl UserRepository for MongoUserRepository {
             .await
             .map_err(|e| RepoError(e.to_string()))?;
         let mut docs = Vec::new();
-        while let Some(doc) = cursor.try_next().await.map_err(|e| RepoError(e.to_string()))? {
+        while let Some(doc) = cursor
+            .try_next()
+            .await
+            .map_err(|e| RepoError(e.to_string()))?
+        {
             docs.push(doc);
         }
         Ok(docs)

@@ -73,12 +73,18 @@ impl UserRepository for MockUserRepo {
         _projection: Option<Document>,
     ) -> RepoResult<Option<Document>> {
         let users = self.users.lock().map_err(|e| RepoError(e.to_string()))?;
-        Ok(users.iter().find(|u| doc_matches_filter(u, &filter)).cloned())
+        Ok(users
+            .iter()
+            .find(|u| doc_matches_filter(u, &filter))
+            .cloned())
     }
 
     async fn update_user(&self, filter: Document, _update: Document) -> RepoResult<u64> {
         let users = self.users.lock().map_err(|e| RepoError(e.to_string()))?;
-        let count = users.iter().filter(|u| doc_matches_filter(u, &filter)).count();
+        let count = users
+            .iter()
+            .filter(|u| doc_matches_filter(u, &filter))
+            .count();
         Ok(count as u64)
     }
 
@@ -87,7 +93,10 @@ impl UserRepository for MockUserRepo {
         let count = if filter.is_empty() {
             users.len()
         } else {
-            users.iter().filter(|u| doc_matches_filter(u, &filter)).count()
+            users
+                .iter()
+                .filter(|u| doc_matches_filter(u, &filter))
+                .count()
         };
         Ok(count as u64)
     }
@@ -104,7 +113,11 @@ impl UserRepository for MockUserRepo {
         let filtered: Vec<Document> = if filter.is_empty() {
             users.clone()
         } else {
-            users.iter().filter(|u| doc_matches_filter(u, &filter)).cloned().collect()
+            users
+                .iter()
+                .filter(|u| doc_matches_filter(u, &filter))
+                .cloned()
+                .collect()
         };
         let skip = skip.unwrap_or(0) as usize;
         let limit = limit.unwrap_or(100) as usize;
@@ -122,7 +135,10 @@ impl UserRepository for MockUserRepo {
     }
 
     async fn count_activities(&self, filter: Document) -> RepoResult<u64> {
-        let activities = self.activities.lock().map_err(|e| RepoError(e.to_string()))?;
+        let activities = self
+            .activities
+            .lock()
+            .map_err(|e| RepoError(e.to_string()))?;
         let count = if filter.is_empty() {
             activities.len()
         } else {
@@ -141,7 +157,10 @@ impl UserRepository for MockUserRepo {
         skip: Option<u64>,
         limit: Option<i64>,
     ) -> RepoResult<Vec<Document>> {
-        let activities = self.activities.lock().map_err(|e| RepoError(e.to_string()))?;
+        let activities = self
+            .activities
+            .lock()
+            .map_err(|e| RepoError(e.to_string()))?;
         let filtered: Vec<Document> = if filter.is_empty() {
             activities.clone()
         } else {
@@ -287,10 +306,7 @@ mod health_tests {
 
     #[actix_web::test]
     async fn test_health_returns_200_with_status() {
-        let app = test::init_service(
-            App::new().route("/health", web::get().to(health)),
-        )
-        .await;
+        let app = test::init_service(App::new().route("/health", web::get().to(health))).await;
 
         let req = test::TestRequest::get().uri("/health").to_request();
         let resp = test::call_service(&app, req).await;
@@ -339,8 +355,12 @@ mod profile_tests {
     #[actix_web::test]
     async fn test_get_profile_success() {
         let oid = test_oid();
-        let repo = MockUserRepo::new()
-            .with_user(make_user_doc(oid, "alice@test.com", "Alice", "customer"));
+        let repo = MockUserRepo::new().with_user(make_user_doc(
+            oid,
+            "alice@test.com",
+            "Alice",
+            "customer",
+        ));
 
         let state = make_state(repo);
         let app = test::init_service(
@@ -422,14 +442,10 @@ mod profile_picture_tests {
     #[actix_web::test]
     async fn test_upload_profile_picture_401_without_auth() {
         let state = make_state(MockUserRepo::new());
-        let app = test::init_service(
-            App::new()
-                .app_data(state)
-                .route(
-                    "/api/users/profile-picture",
-                    web::post().to(update_profile_picture),
-                ),
-        )
+        let app = test::init_service(App::new().app_data(state).route(
+            "/api/users/profile-picture",
+            web::post().to(update_profile_picture),
+        ))
         .await;
 
         let req = test::TestRequest::post()
@@ -445,18 +461,18 @@ mod profile_picture_tests {
     #[actix_web::test]
     async fn test_upload_profile_picture_400_no_file() {
         let oid = test_oid();
-        let repo = MockUserRepo::new()
-            .with_user(make_user_doc(oid, "alice@test.com", "Alice", "customer"));
+        let repo = MockUserRepo::new().with_user(make_user_doc(
+            oid,
+            "alice@test.com",
+            "Alice",
+            "customer",
+        ));
         let state = make_state(repo);
 
-        let app = test::init_service(
-            App::new()
-                .app_data(state)
-                .route(
-                    "/api/users/profile-picture",
-                    web::post().to(update_profile_picture),
-                ),
-        )
+        let app = test::init_service(App::new().app_data(state).route(
+            "/api/users/profile-picture",
+            web::post().to(update_profile_picture),
+        ))
         .await;
 
         // Send multipart request with no file field
@@ -478,7 +494,10 @@ mod profile_picture_tests {
 
         let body: serde_json::Value = test::read_body_json(resp).await;
         assert_eq!(body["success"], false);
-        assert!(body["error"].as_str().unwrap().contains("No profile picture"));
+        assert!(body["error"]
+            .as_str()
+            .unwrap()
+            .contains("No profile picture"));
     }
 }
 
@@ -513,8 +532,12 @@ mod delete_avatar_tests {
     #[actix_web::test]
     async fn test_delete_avatar_success() {
         let oid = test_oid();
-        let repo = MockUserRepo::new()
-            .with_user(make_user_doc(oid, "alice@test.com", "Alice", "customer"));
+        let repo = MockUserRepo::new().with_user(make_user_doc(
+            oid,
+            "alice@test.com",
+            "Alice",
+            "customer",
+        ));
         let state = make_state(repo);
 
         let app = test::init_service(
@@ -533,10 +556,7 @@ mod delete_avatar_tests {
         assert_eq!(resp.status().as_u16(), 200);
         let body: serde_json::Value = test::read_body_json(resp).await;
         assert_eq!(body["success"], true);
-        assert!(body["message"]
-            .as_str()
-            .unwrap()
-            .contains("deleted"));
+        assert!(body["message"].as_str().unwrap().contains("deleted"));
     }
 
     #[actix_web::test]
@@ -594,8 +614,12 @@ mod settings_get_tests {
     #[actix_web::test]
     async fn test_get_settings_success_with_defaults() {
         let oid = test_oid();
-        let repo = MockUserRepo::new()
-            .with_user(make_user_doc(oid, "alice@test.com", "Alice", "customer"));
+        let repo = MockUserRepo::new().with_user(make_user_doc(
+            oid,
+            "alice@test.com",
+            "Alice",
+            "customer",
+        ));
         let state = make_state(repo);
 
         let app = test::init_service(
@@ -683,8 +707,12 @@ mod settings_update_tests {
     #[actix_web::test]
     async fn test_update_settings_success() {
         let oid = test_oid();
-        let repo = MockUserRepo::new()
-            .with_user(make_user_doc(oid, "alice@test.com", "Alice", "customer"));
+        let repo = MockUserRepo::new().with_user(make_user_doc(
+            oid,
+            "alice@test.com",
+            "Alice",
+            "customer",
+        ));
         let state = make_state(repo);
 
         let app = test::init_service(
@@ -720,8 +748,12 @@ mod settings_update_tests {
     #[actix_web::test]
     async fn test_update_settings_400_invalid_theme() {
         let oid = test_oid();
-        let repo = MockUserRepo::new()
-            .with_user(make_user_doc(oid, "alice@test.com", "Alice", "customer"));
+        let repo = MockUserRepo::new().with_user(make_user_doc(
+            oid,
+            "alice@test.com",
+            "Alice",
+            "customer",
+        ));
         let state = make_state(repo);
 
         let app = test::init_service(
@@ -762,14 +794,10 @@ mod change_password_tests {
     #[actix_web::test]
     async fn test_change_password_401_without_auth() {
         let state = make_state(MockUserRepo::new());
-        let app = test::init_service(
-            App::new()
-                .app_data(state)
-                .route(
-                    "/api/users/change-password",
-                    web::post().to(change_password),
-                ),
-        )
+        let app = test::init_service(App::new().app_data(state).route(
+            "/api/users/change-password",
+            web::post().to(change_password),
+        ))
         .await;
 
         let req = test::TestRequest::post()
@@ -788,18 +816,18 @@ mod change_password_tests {
     #[actix_web::test]
     async fn test_change_password_success() {
         let oid = test_oid();
-        let repo = MockUserRepo::new()
-            .with_user(make_user_doc(oid, "alice@test.com", "Alice", "customer"));
+        let repo = MockUserRepo::new().with_user(make_user_doc(
+            oid,
+            "alice@test.com",
+            "Alice",
+            "customer",
+        ));
         let state = make_state(repo);
 
-        let app = test::init_service(
-            App::new()
-                .app_data(state)
-                .route(
-                    "/api/users/change-password",
-                    web::post().to(change_password),
-                ),
-        )
+        let app = test::init_service(App::new().app_data(state).route(
+            "/api/users/change-password",
+            web::post().to(change_password),
+        ))
         .await;
 
         let req = test::TestRequest::post()
@@ -824,18 +852,18 @@ mod change_password_tests {
     #[actix_web::test]
     async fn test_change_password_400_wrong_current_password() {
         let oid = test_oid();
-        let repo = MockUserRepo::new()
-            .with_user(make_user_doc(oid, "alice@test.com", "Alice", "customer"));
+        let repo = MockUserRepo::new().with_user(make_user_doc(
+            oid,
+            "alice@test.com",
+            "Alice",
+            "customer",
+        ));
         let state = make_state(repo);
 
-        let app = test::init_service(
-            App::new()
-                .app_data(state)
-                .route(
-                    "/api/users/change-password",
-                    web::post().to(change_password),
-                ),
-        )
+        let app = test::init_service(App::new().app_data(state).route(
+            "/api/users/change-password",
+            web::post().to(change_password),
+        ))
         .await;
 
         let req = test::TestRequest::post()
@@ -850,27 +878,24 @@ mod change_password_tests {
 
         let body: serde_json::Value = test::read_body_json(resp).await;
         assert_eq!(body["success"], false);
-        assert!(body["error"]
-            .as_str()
-            .unwrap()
-            .contains("incorrect"));
+        assert!(body["error"].as_str().unwrap().contains("incorrect"));
     }
 
     #[actix_web::test]
     async fn test_change_password_400_short_new_password() {
         let oid = test_oid();
-        let repo = MockUserRepo::new()
-            .with_user(make_user_doc(oid, "alice@test.com", "Alice", "customer"));
+        let repo = MockUserRepo::new().with_user(make_user_doc(
+            oid,
+            "alice@test.com",
+            "Alice",
+            "customer",
+        ));
         let state = make_state(repo);
 
-        let app = test::init_service(
-            App::new()
-                .app_data(state)
-                .route(
-                    "/api/users/change-password",
-                    web::post().to(change_password),
-                ),
-        )
+        let app = test::init_service(App::new().app_data(state).route(
+            "/api/users/change-password",
+            web::post().to(change_password),
+        ))
         .await;
 
         let req = test::TestRequest::post()
@@ -892,14 +917,10 @@ mod change_password_tests {
         let oid = test_oid();
         let state = make_state(MockUserRepo::new());
 
-        let app = test::init_service(
-            App::new()
-                .app_data(state)
-                .route(
-                    "/api/users/change-password",
-                    web::post().to(change_password),
-                ),
-        )
+        let app = test::init_service(App::new().app_data(state).route(
+            "/api/users/change-password",
+            web::post().to(change_password),
+        ))
         .await;
 
         let req = test::TestRequest::post()
@@ -1032,8 +1053,12 @@ mod update_role_tests {
     #[actix_web::test]
     async fn test_update_role_403_non_admin() {
         let oid = test_oid();
-        let repo = MockUserRepo::new()
-            .with_user(make_user_doc(oid, "alice@test.com", "Alice", "customer"));
+        let repo = MockUserRepo::new().with_user(make_user_doc(
+            oid,
+            "alice@test.com",
+            "Alice",
+            "customer",
+        ));
         let state = make_state(repo);
 
         let app = test::init_service(
@@ -1061,8 +1086,8 @@ mod update_role_tests {
     #[actix_web::test]
     async fn test_update_role_success_as_admin() {
         let oid = test_oid();
-        let repo = MockUserRepo::new()
-            .with_user(make_user_doc(oid, "admin@test.com", "Admin", "admin"));
+        let repo =
+            MockUserRepo::new().with_user(make_user_doc(oid, "admin@test.com", "Admin", "admin"));
         let state = make_state(repo);
 
         let app = test::init_service(
@@ -1082,17 +1107,14 @@ mod update_role_tests {
         assert_eq!(resp.status().as_u16(), 200);
         let body: serde_json::Value = test::read_body_json(resp).await;
         assert_eq!(body["success"], true);
-        assert!(body["message"]
-            .as_str()
-            .unwrap()
-            .contains("editor"));
+        assert!(body["message"].as_str().unwrap().contains("editor"));
     }
 
     #[actix_web::test]
     async fn test_update_role_400_invalid_role() {
         let oid = test_oid();
-        let repo = MockUserRepo::new()
-            .with_user(make_user_doc(oid, "admin@test.com", "Admin", "admin"));
+        let repo =
+            MockUserRepo::new().with_user(make_user_doc(oid, "admin@test.com", "Admin", "admin"));
         let state = make_state(repo);
 
         let app = test::init_service(
@@ -1230,8 +1252,12 @@ mod export_tests {
     #[actix_web::test]
     async fn test_export_success() {
         let oid = test_oid();
-        let repo = MockUserRepo::new()
-            .with_user(make_user_doc(oid, "alice@test.com", "Alice", "customer"));
+        let repo = MockUserRepo::new().with_user(make_user_doc(
+            oid,
+            "alice@test.com",
+            "Alice",
+            "customer",
+        ));
         let state = make_state(repo);
 
         let app = test::init_service(
@@ -1398,17 +1424,18 @@ mod import_tests {
 
         let body: serde_json::Value = test::read_body_json(resp).await;
         assert_eq!(body["success"], false);
-        assert!(body["error"]
-            .as_str()
-            .unwrap()
-            .contains("Invalid email"));
+        assert!(body["error"].as_str().unwrap().contains("Invalid email"));
     }
 
     #[actix_web::test]
     async fn test_import_400_duplicate_email() {
         let oid = test_oid();
-        let repo = MockUserRepo::new()
-            .with_user(make_user_doc(test_oid(), "existing@test.com", "Existing", "customer"));
+        let repo = MockUserRepo::new().with_user(make_user_doc(
+            test_oid(),
+            "existing@test.com",
+            "Existing",
+            "customer",
+        ));
         let state = make_state(repo);
 
         let app = test::init_service(
@@ -1432,11 +1459,11 @@ mod import_tests {
 
         let body: serde_json::Value = test::read_body_json(resp).await;
         assert_eq!(body["success"], false);
-        assert!(
-            body["errors"].as_array().unwrap().iter().any(|e| {
-                e.as_str().unwrap().contains("already exists")
-            })
-        );
+        assert!(body["errors"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|e| { e.as_str().unwrap().contains("already exists") }));
     }
 }
 
@@ -1498,7 +1525,12 @@ mod admin_search_tests {
     async fn test_admin_search_success() {
         let oid = test_oid();
         let repo = MockUserRepo::new()
-            .with_user(make_user_doc(test_oid(), "alice@test.com", "Alice", "customer"))
+            .with_user(make_user_doc(
+                test_oid(),
+                "alice@test.com",
+                "Alice",
+                "customer",
+            ))
             .with_user(make_user_doc(test_oid(), "bob@test.com", "Bob", "editor"));
         let state = make_state(repo);
 
@@ -1566,10 +1598,7 @@ mod admin_update_tests {
         let app = test::init_service(
             App::new()
                 .app_data(state)
-                .route(
-                    "/api/admin/users/{id}",
-                    web::put().to(admin_update_user),
-                ),
+                .route("/api/admin/users/{id}", web::put().to(admin_update_user)),
         )
         .await;
 
@@ -1592,10 +1621,7 @@ mod admin_update_tests {
         let app = test::init_service(
             App::new()
                 .app_data(state)
-                .route(
-                    "/api/admin/users/{id}",
-                    web::put().to(admin_update_user),
-                ),
+                .route("/api/admin/users/{id}", web::put().to(admin_update_user)),
         )
         .await;
 
@@ -1618,17 +1644,18 @@ mod admin_update_tests {
     async fn test_admin_update_success() {
         let admin_oid = test_oid();
         let target_oid = test_oid();
-        let repo = MockUserRepo::new()
-            .with_user(make_user_doc(target_oid, "target@test.com", "Target", "customer"));
+        let repo = MockUserRepo::new().with_user(make_user_doc(
+            target_oid,
+            "target@test.com",
+            "Target",
+            "customer",
+        ));
         let state = make_state(repo);
 
         let app = test::init_service(
             App::new()
                 .app_data(state)
-                .route(
-                    "/api/admin/users/{id}",
-                    web::put().to(admin_update_user),
-                ),
+                .route("/api/admin/users/{id}", web::put().to(admin_update_user)),
         )
         .await;
 
@@ -1660,10 +1687,7 @@ mod admin_update_tests {
         let app = test::init_service(
             App::new()
                 .app_data(state)
-                .route(
-                    "/api/admin/users/{id}",
-                    web::put().to(admin_update_user),
-                ),
+                .route("/api/admin/users/{id}", web::put().to(admin_update_user)),
         )
         .await;
 
@@ -1683,17 +1707,18 @@ mod admin_update_tests {
     async fn test_admin_update_400_invalid_role() {
         let admin_oid = test_oid();
         let target_oid = test_oid();
-        let repo = MockUserRepo::new()
-            .with_user(make_user_doc(target_oid, "target@test.com", "Target", "customer"));
+        let repo = MockUserRepo::new().with_user(make_user_doc(
+            target_oid,
+            "target@test.com",
+            "Target",
+            "customer",
+        ));
         let state = make_state(repo);
 
         let app = test::init_service(
             App::new()
                 .app_data(state)
-                .route(
-                    "/api/admin/users/{id}",
-                    web::put().to(admin_update_user),
-                ),
+                .route("/api/admin/users/{id}", web::put().to(admin_update_user)),
         )
         .await;
 
@@ -1712,17 +1737,18 @@ mod admin_update_tests {
     async fn test_admin_update_400_invalid_email() {
         let admin_oid = test_oid();
         let target_oid = test_oid();
-        let repo = MockUserRepo::new()
-            .with_user(make_user_doc(target_oid, "target@test.com", "Target", "customer"));
+        let repo = MockUserRepo::new().with_user(make_user_doc(
+            target_oid,
+            "target@test.com",
+            "Target",
+            "customer",
+        ));
         let state = make_state(repo);
 
         let app = test::init_service(
             App::new()
                 .app_data(state)
-                .route(
-                    "/api/admin/users/{id}",
-                    web::put().to(admin_update_user),
-                ),
+                .route("/api/admin/users/{id}", web::put().to(admin_update_user)),
         )
         .await;
 

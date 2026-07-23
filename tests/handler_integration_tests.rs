@@ -10,7 +10,6 @@ use std::sync::{Arc, Mutex};
 
 use actix_web::{web, App, HttpRequest, HttpResponse, Result as ActixResult};
 use async_trait::async_trait;
-use futures_util::TryStreamExt;
 use jsonwebtoken::{encode, EncodingKey, Header};
 use mongodb::bson::{doc, oid::ObjectId, DateTime as BsonDateTime, Document};
 use serde_json::json;
@@ -296,7 +295,10 @@ impl UserRepository for InMemoryRepo {
 
     async fn count_users(&self, filter: Document) -> RepoResult<u64> {
         let users = self.users.lock().unwrap();
-        let count = users.iter().filter(|u| Self::doc_matches(u, &filter)).count();
+        let count = users
+            .iter()
+            .filter(|u| Self::doc_matches(u, &filter))
+            .count();
         Ok(count as u64)
     }
 
@@ -438,9 +440,18 @@ mod handler_helpers {
             user_id: activity_doc.get_str("user_id").unwrap_or("").to_string(),
             action: activity_doc.get_str("action").unwrap_or("").to_string(),
             resource: activity_doc.get_str("resource").ok().map(|s| s.to_string()),
-            resource_id: activity_doc.get_str("resource_id").ok().map(|s| s.to_string()),
-            ip_address: activity_doc.get_str("ip_address").ok().map(|s| s.to_string()),
-            user_agent: activity_doc.get_str("user_agent").ok().map(|s| s.to_string()),
+            resource_id: activity_doc
+                .get_str("resource_id")
+                .ok()
+                .map(|s| s.to_string()),
+            ip_address: activity_doc
+                .get_str("ip_address")
+                .ok()
+                .map(|s| s.to_string()),
+            user_agent: activity_doc
+                .get_str("user_agent")
+                .ok()
+                .map(|s| s.to_string()),
             timestamp: activity_doc
                 .get_datetime("timestamp")
                 .map(|dt| dt.try_to_rfc3339_string().unwrap_or_default())
@@ -491,21 +502,31 @@ mod handler_helpers {
                 name: "admin".to_string(),
                 description: "Full system access with administrative privileges".to_string(),
                 permissions: vec![
-                    "read".to_string(), "write".to_string(), "delete".to_string(),
-                    "admin".to_string(), "user_management".to_string(), "system_settings".to_string(),
+                    "read".to_string(),
+                    "write".to_string(),
+                    "delete".to_string(),
+                    "admin".to_string(),
+                    "user_management".to_string(),
+                    "system_settings".to_string(),
                 ],
             },
             RoleInfo {
                 name: "customer".to_string(),
                 description: "Regular user with standard access".to_string(),
-                permissions: vec!["read".to_string(), "write".to_string(), "profile_edit".to_string()],
+                permissions: vec![
+                    "read".to_string(),
+                    "write".to_string(),
+                    "profile_edit".to_string(),
+                ],
             },
             RoleInfo {
                 name: "editor".to_string(),
                 description: "Content editor with enhanced permissions".to_string(),
                 permissions: vec![
-                    "read".to_string(), "write".to_string(),
-                    "content_edit".to_string(), "profile_edit".to_string(),
+                    "read".to_string(),
+                    "write".to_string(),
+                    "content_edit".to_string(),
+                    "profile_edit".to_string(),
                 ],
             },
             RoleInfo {
@@ -797,7 +818,11 @@ mod handlers {
             "role": 1, "profilePicture": 1, "useGravatar": 1, "location": 1
         };
 
-        let user = match state.repo.find_user(doc! { "_id": oid }, Some(projection)).await {
+        let user = match state
+            .repo
+            .find_user(doc! { "_id": oid }, Some(projection))
+            .await
+        {
             Ok(u) => u,
             Err(e) => {
                 return Ok(HttpResponse::InternalServerError().json(ErrorResponse {
@@ -842,7 +867,10 @@ mod handlers {
             message: None,
         };
 
-        state.cache.cache_settings(&cache_key, &response_data, 1800).await;
+        state
+            .cache
+            .cache_settings(&cache_key, &response_data, 1800)
+            .await;
 
         Ok(HttpResponse::Ok().json(response_data))
     }
@@ -882,7 +910,10 @@ mod handlers {
 
             let current_user = match state
                 .repo
-                .find_user(doc! { "_id": oid }, Some(doc! { "password": 1, "email": 1 }))
+                .find_user(
+                    doc! { "_id": oid },
+                    Some(doc! { "password": 1, "email": 1 }),
+                )
                 .await
             {
                 Ok(u) => u,
@@ -1031,7 +1062,10 @@ mod handlers {
 
         let current_user = match state
             .repo
-            .find_user(doc! { "_id": oid }, Some(doc! { "password": 1, "email": 1 }))
+            .find_user(
+                doc! { "_id": oid },
+                Some(doc! { "password": 1, "email": 1 }),
+            )
             .await
         {
             Ok(u) => u,
@@ -1279,11 +1313,20 @@ mod handlers {
 
         let (page, limit, skip) = parse_pagination(query.page, query.limit, 20, 100);
         let filter = doc! { "user_id": &claims.user_id };
-        let total = state.repo.count_activities(filter.clone()).await.unwrap_or(0);
+        let total = state
+            .repo
+            .count_activities(filter.clone())
+            .await
+            .unwrap_or(0);
 
         let activity_docs = match state
             .repo
-            .find_activities(filter, Some(doc! { "timestamp": -1 }), Some(skip), Some(limit as i64))
+            .find_activities(
+                filter,
+                Some(doc! { "timestamp": -1 }),
+                Some(skip),
+                Some(limit as i64),
+            )
             .await
         {
             Ok(docs) => docs,
@@ -1335,7 +1378,11 @@ mod handlers {
         };
 
         let projection = doc! { "password": 0, "resetToken": 0, "resetTokenExpiry": 0 };
-        let user = match state.repo.find_user(doc! { "_id": oid }, Some(projection)).await {
+        let user = match state
+            .repo
+            .find_user(doc! { "_id": oid }, Some(projection))
+            .await
+        {
             Ok(u) => u,
             Err(e) => {
                 return Ok(HttpResponse::InternalServerError().json(ErrorResponse {
@@ -1484,13 +1531,15 @@ mod handlers {
                 errors: vec![],
                 message: "User imported successfully. A password reset is required.".to_string(),
             })),
-            Err(e) => Ok(HttpResponse::InternalServerError().json(DataImportResponse {
-                success: false,
-                imported_count: 0,
-                failed_count: 1,
-                errors: vec![format!("Database error: {}", e)],
-                message: "Import failed".to_string(),
-            })),
+            Err(e) => Ok(
+                HttpResponse::InternalServerError().json(DataImportResponse {
+                    success: false,
+                    imported_count: 0,
+                    failed_count: 1,
+                    errors: vec![format!("Database error: {}", e)],
+                    message: "Import failed".to_string(),
+                }),
+            ),
         }
     }
 
@@ -1533,7 +1582,13 @@ mod handlers {
 
         let user_docs = match state
             .repo
-            .find_users(filter, Some(projection), Some(sort_doc), Some(skip), Some(limit as i64))
+            .find_users(
+                filter,
+                Some(projection),
+                Some(sort_doc),
+                Some(skip),
+                Some(limit as i64),
+            )
             .await
         {
             Ok(docs) => docs,
@@ -1676,7 +1731,10 @@ fn build_test_app(
                 .route("/avatar", web::delete().to(handlers::delete_avatar))
                 .route("/settings", web::get().to(handlers::get_settings))
                 .route("/settings", web::put().to(handlers::update_settings))
-                .route("/change-password", web::post().to(handlers::change_password))
+                .route(
+                    "/change-password",
+                    web::post().to(handlers::change_password),
+                )
                 .route("/roles", web::get().to(handlers::get_user_roles))
                 .route("/roles", web::put().to(handlers::update_user_role))
                 .route("/activity", web::get().to(handlers::get_user_activity))
@@ -1713,20 +1771,8 @@ fn seeded_repo() -> InMemoryRepo {
     let admin_oid = test_admin_oid();
     let pw_hash = test_password_hash();
 
-    repo.seed_user(
-        user_oid,
-        "user@test.com",
-        "Test User",
-        "customer",
-        &pw_hash,
-    );
-    repo.seed_user(
-        admin_oid,
-        "admin@test.com",
-        "Admin User",
-        "admin",
-        &pw_hash,
-    );
+    repo.seed_user(user_oid, "user@test.com", "Test User", "customer", &pw_hash);
+    repo.seed_user(admin_oid, "admin@test.com", "Admin User", "admin", &pw_hash);
 
     // Seed some activities
     repo.seed_activity(&user_oid.to_hex(), "login");
@@ -1904,7 +1950,11 @@ mod auth_validation_tests {
             .to_request();
 
         let resp = test::call_service(&app, req).await;
-        assert_eq!(resp.status().as_u16(), 401, "Expired token should return 401");
+        assert_eq!(
+            resp.status().as_u16(),
+            401,
+            "Expired token should return 401"
+        );
     }
 
     #[actix_web::test]
@@ -2139,7 +2189,10 @@ mod settings_tests {
 
         let body: serde_json::Value = test::read_body_json(resp).await;
         assert_eq!(body["success"], true);
-        assert!(body["message"].as_str().unwrap().contains("Settings updated"));
+        assert!(body["message"]
+            .as_str()
+            .unwrap()
+            .contains("Settings updated"));
     }
 
     #[actix_web::test]
@@ -2195,7 +2248,10 @@ mod settings_tests {
             .iter()
             .find(|u| u.get_str("email").unwrap_or("") == "user@test.com")
             .unwrap();
-        assert!(user.contains_key("settings"), "Settings should be persisted");
+        assert!(
+            user.contains_key("settings"),
+            "Settings should be persisted"
+        );
     }
 }
 
@@ -2269,7 +2325,11 @@ mod password_tests {
             .to_request();
 
         let resp = test::call_service(&app, req).await;
-        assert_eq!(resp.status().as_u16(), 400, "Short password should be rejected");
+        assert_eq!(
+            resp.status().as_u16(),
+            400,
+            "Short password should be rejected"
+        );
     }
 
     #[actix_web::test]
@@ -2288,7 +2348,11 @@ mod password_tests {
             .to_request();
 
         let resp = test::call_service(&app, req).await;
-        assert_eq!(resp.status().as_u16(), 400, "Empty current password should be rejected");
+        assert_eq!(
+            resp.status().as_u16(),
+            400,
+            "Empty current password should be rejected"
+        );
     }
 
     #[actix_web::test]
@@ -2661,10 +2725,7 @@ mod admin_tests {
         let admin_token = make_token(&test_admin_oid().to_hex(), "admin", "admin");
 
         let req = test::TestRequest::put()
-            .uri(&format!(
-                "/api/admin/users/{}",
-                test_user_oid().to_hex()
-            ))
+            .uri(&format!("/api/admin/users/{}", test_user_oid().to_hex()))
             .insert_header(bearer(&admin_token))
             .set_json(json!({
                 "name": "Updated Name",
@@ -2695,10 +2756,7 @@ mod admin_tests {
         let customer_token = make_token(&test_user_oid().to_hex(), "customer", "customer");
 
         let req = test::TestRequest::put()
-            .uri(&format!(
-                "/api/admin/users/{}",
-                test_admin_oid().to_hex()
-            ))
+            .uri(&format!("/api/admin/users/{}", test_admin_oid().to_hex()))
             .insert_header(bearer(&customer_token))
             .set_json(json!({ "name": "Hacked" }))
             .to_request();
@@ -2730,10 +2788,7 @@ mod admin_tests {
         let admin_token = make_token(&test_admin_oid().to_hex(), "admin", "admin");
 
         let req = test::TestRequest::put()
-            .uri(&format!(
-                "/api/admin/users/{}",
-                ObjectId::new().to_hex()
-            ))
+            .uri(&format!("/api/admin/users/{}", ObjectId::new().to_hex()))
             .insert_header(bearer(&admin_token))
             .set_json(json!({ "name": "Nobody" }))
             .to_request();
@@ -2749,10 +2804,7 @@ mod admin_tests {
         let admin_token = make_token(&test_admin_oid().to_hex(), "admin", "admin");
 
         let req = test::TestRequest::put()
-            .uri(&format!(
-                "/api/admin/users/{}",
-                test_user_oid().to_hex()
-            ))
+            .uri(&format!("/api/admin/users/{}", test_user_oid().to_hex()))
             .insert_header(bearer(&admin_token))
             .set_json(json!({ "role": "superuser" }))
             .to_request();

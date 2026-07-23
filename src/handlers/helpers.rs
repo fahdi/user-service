@@ -6,8 +6,7 @@
 use mongodb::bson::{doc, oid::ObjectId, Document};
 
 use crate::models::user::{
-    StandardizedUser, UserBasicInfo, PaginationInfo, RoleInfo, ActivityLog,
-    AdminUserUpdateRequest,
+    ActivityLog, AdminUserUpdateRequest, PaginationInfo, RoleInfo, StandardizedUser, UserBasicInfo,
 };
 
 // ---------------------------------------------------------------------------
@@ -61,9 +60,18 @@ pub fn standardize_activity_doc(activity_doc: &Document) -> Result<ActivityLog, 
         user_id: activity_doc.get_str("user_id").unwrap_or("").to_string(),
         action: activity_doc.get_str("action").unwrap_or("").to_string(),
         resource: activity_doc.get_str("resource").ok().map(|s| s.to_string()),
-        resource_id: activity_doc.get_str("resource_id").ok().map(|s| s.to_string()),
-        ip_address: activity_doc.get_str("ip_address").ok().map(|s| s.to_string()),
-        user_agent: activity_doc.get_str("user_agent").ok().map(|s| s.to_string()),
+        resource_id: activity_doc
+            .get_str("resource_id")
+            .ok()
+            .map(|s| s.to_string()),
+        ip_address: activity_doc
+            .get_str("ip_address")
+            .ok()
+            .map(|s| s.to_string()),
+        user_agent: activity_doc
+            .get_str("user_agent")
+            .ok()
+            .map(|s| s.to_string()),
         timestamp: activity_doc
             .get_datetime("timestamp")
             .map(|dt| dt.try_to_rfc3339_string().unwrap_or_default())
@@ -113,8 +121,7 @@ pub fn determine_target_user_id(
     claims_role: &str,
     claims_role_type: &str,
 ) -> String {
-    if (query_user_id.is_some() || query_email.is_some())
-        && is_admin(claims_role, claims_role_type)
+    if (query_user_id.is_some() || query_email.is_some()) && is_admin(claims_role, claims_role_type)
     {
         query_user_id
             .unwrap_or_else(|| query_email.unwrap_or(claims_user_id))
@@ -303,15 +310,19 @@ pub fn build_activity_filter(
 
         if let Some(sd) = start_date {
             if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(sd) {
-                date_filter
-                    .insert("$gte", mongodb::bson::DateTime::from_millis(dt.timestamp_millis()));
+                date_filter.insert(
+                    "$gte",
+                    mongodb::bson::DateTime::from_millis(dt.timestamp_millis()),
+                );
             }
         }
 
         if let Some(ed) = end_date {
             if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(ed) {
-                date_filter
-                    .insert("$lte", mongodb::bson::DateTime::from_millis(dt.timestamp_millis()));
+                date_filter.insert(
+                    "$lte",
+                    mongodb::bson::DateTime::from_millis(dt.timestamp_millis()),
+                );
             }
         }
 
@@ -362,10 +373,7 @@ pub fn build_admin_update_fields(body: &AdminUserUpdateRequest) -> Document {
 /// Build a success message for settings updates.
 ///
 /// If account changes include email and/or password changes, appends them.
-pub fn build_settings_success_message(
-    email_changed: bool,
-    password_changed: bool,
-) -> String {
+pub fn build_settings_success_message(email_changed: bool, password_changed: bool) -> String {
     let mut msg = "Settings updated successfully".to_string();
     let mut changes = Vec::new();
     if email_changed {
@@ -490,7 +498,10 @@ mod tests {
         assert_eq!(user.department, Some("Engineering".to_string()));
         assert_eq!(user.position, Some("CTO".to_string()));
         assert_eq!(user.username, Some("alice42".to_string()));
-        assert_eq!(user.profile_picture, Some("https://example.com/pic.jpg".to_string()));
+        assert_eq!(
+            user.profile_picture,
+            Some("https://example.com/pic.jpg".to_string())
+        );
         assert_eq!(user.use_gravatar, Some(false));
         assert_eq!(user.location, Some("NYC".to_string()));
     }
@@ -652,7 +663,10 @@ mod tests {
         assert_eq!(info.email, "bob@example.com");
         assert_eq!(info.name, "Bob");
         assert_eq!(info.role, "editor");
-        assert_eq!(info.profile_picture, Some("https://example.com/bob.jpg".to_string()));
+        assert_eq!(
+            info.profile_picture,
+            Some("https://example.com/bob.jpg".to_string())
+        );
         assert_eq!(info.use_gravatar, Some(true));
         assert_eq!(info.location, Some("London".to_string()));
     }
@@ -981,7 +995,10 @@ mod tests {
     #[test]
     fn test_search_filter_with_empty_query() {
         let filter = build_search_filter(Some("  "), None);
-        assert!(!filter.contains_key("$or"), "Whitespace-only query should be ignored");
+        assert!(
+            !filter.contains_key("$or"),
+            "Whitespace-only query should be ignored"
+        );
     }
 
     #[test]
@@ -993,7 +1010,10 @@ mod tests {
     #[test]
     fn test_search_filter_with_empty_role() {
         let filter = build_search_filter(None, Some("  "));
-        assert!(!filter.contains_key("role"), "Whitespace-only role should be ignored");
+        assert!(
+            !filter.contains_key("role"),
+            "Whitespace-only role should be ignored"
+        );
     }
 
     #[test]
@@ -1124,12 +1144,7 @@ mod tests {
 
     #[test]
     fn test_activity_filter_with_start_date() {
-        let filter = build_activity_filter(
-            "user_123",
-            None,
-            Some("2025-01-01T00:00:00Z"),
-            None,
-        );
+        let filter = build_activity_filter("user_123", None, Some("2025-01-01T00:00:00Z"), None);
         assert!(filter.contains_key("timestamp"));
         let ts = filter.get_document("timestamp").unwrap();
         assert!(ts.contains_key("$gte"));
@@ -1138,12 +1153,7 @@ mod tests {
 
     #[test]
     fn test_activity_filter_with_end_date() {
-        let filter = build_activity_filter(
-            "user_123",
-            None,
-            None,
-            Some("2025-12-31T23:59:59Z"),
-        );
+        let filter = build_activity_filter("user_123", None, None, Some("2025-12-31T23:59:59Z"));
         assert!(filter.contains_key("timestamp"));
         let ts = filter.get_document("timestamp").unwrap();
         assert!(!ts.contains_key("$gte"));
@@ -1275,7 +1285,10 @@ mod tests {
     #[test]
     fn test_settings_message_both_changed() {
         let msg = build_settings_success_message(true, true);
-        assert_eq!(msg, "Settings updated successfully. email and password updated.");
+        assert_eq!(
+            msg,
+            "Settings updated successfully. email and password updated."
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -1384,8 +1397,8 @@ mod tests {
 
     #[test]
     fn test_collect_validation_errors_with_errors() {
-        use validator::Validate;
         use crate::models::user::PasswordChangeRequest;
+        use validator::Validate;
 
         let req = PasswordChangeRequest {
             current_password: "".to_string(),
@@ -1399,11 +1412,11 @@ mod tests {
 
     #[test]
     fn test_collect_validation_errors_multiple() {
-        use validator::Validate;
         use crate::models::user::PasswordChangeRequest;
+        use validator::Validate;
 
         let req = PasswordChangeRequest {
-            current_password: "".to_string(), // fails min length 1
+            current_password: "".to_string(),  // fails min length 1
             new_password: "short".to_string(), // fails min length 8
         };
         let errs = req.validate().unwrap_err();

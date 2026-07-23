@@ -292,7 +292,10 @@ mod tests {
         assert_eq!(deserialized.role, "customer");
         assert!(deserialized.is_active);
         assert!(deserialized.email_verified);
-        assert_eq!(deserialized.profile_picture, Some("https://example.com/pic.jpg".to_string()));
+        assert_eq!(
+            deserialized.profile_picture,
+            Some("https://example.com/pic.jpg".to_string())
+        );
         assert_eq!(deserialized.use_gravatar, Some(false));
         assert_eq!(deserialized.location, Some("Grand Rapids, MI".to_string()));
         assert_eq!(deserialized.cached_at, 1700000000);
@@ -357,12 +360,30 @@ mod tests {
 
         let json = serde_json::to_string(&user).unwrap();
         // Check camelCase field names in serialized JSON
-        assert!(json.contains("\"isActive\""), "is_active should serialize as isActive");
-        assert!(json.contains("\"emailVerified\""), "email_verified should serialize as emailVerified");
-        assert!(json.contains("\"createdAt\""), "created_at should serialize as createdAt");
-        assert!(json.contains("\"updatedAt\""), "updated_at should serialize as updatedAt");
-        assert!(json.contains("\"profilePicture\""), "profile_picture should serialize as profilePicture");
-        assert!(json.contains("\"useGravatar\""), "use_gravatar should serialize as useGravatar");
+        assert!(
+            json.contains("\"isActive\""),
+            "is_active should serialize as isActive"
+        );
+        assert!(
+            json.contains("\"emailVerified\""),
+            "email_verified should serialize as emailVerified"
+        );
+        assert!(
+            json.contains("\"createdAt\""),
+            "created_at should serialize as createdAt"
+        );
+        assert!(
+            json.contains("\"updatedAt\""),
+            "updated_at should serialize as updatedAt"
+        );
+        assert!(
+            json.contains("\"profilePicture\""),
+            "profile_picture should serialize as profilePicture"
+        );
+        assert!(
+            json.contains("\"useGravatar\""),
+            "use_gravatar should serialize as useGravatar"
+        );
     }
 
     #[test]
@@ -390,12 +411,30 @@ mod tests {
         let json = serde_json::to_string(&user).unwrap();
         assert!(!json.contains("phone"), "None phone should be skipped");
         assert!(!json.contains("company"), "None company should be skipped");
-        assert!(!json.contains("department"), "None department should be skipped");
-        assert!(!json.contains("position"), "None position should be skipped");
-        assert!(!json.contains("username"), "None username should be skipped");
-        assert!(!json.contains("profilePicture"), "None profilePicture should be skipped");
-        assert!(!json.contains("useGravatar"), "None useGravatar should be skipped");
-        assert!(!json.contains("location"), "None location should be skipped");
+        assert!(
+            !json.contains("department"),
+            "None department should be skipped"
+        );
+        assert!(
+            !json.contains("position"),
+            "None position should be skipped"
+        );
+        assert!(
+            !json.contains("username"),
+            "None username should be skipped"
+        );
+        assert!(
+            !json.contains("profilePicture"),
+            "None profilePicture should be skipped"
+        );
+        assert!(
+            !json.contains("useGravatar"),
+            "None useGravatar should be skipped"
+        );
+        assert!(
+            !json.contains("location"),
+            "None location should be skipped"
+        );
     }
 
     // ---- UserSettings defaults and validation ----
@@ -419,7 +458,11 @@ mod tests {
                 theme: theme.to_string(),
                 ..UserSettings::default()
             };
-            assert!(settings.validate().is_ok(), "Theme '{}' should be valid", theme);
+            assert!(
+                settings.validate().is_ok(),
+                "Theme '{}' should be valid",
+                theme
+            );
         }
     }
 
@@ -429,7 +472,10 @@ mod tests {
             theme: "neon".to_string(),
             ..UserSettings::default()
         };
-        assert!(settings.validate().is_err(), "Theme 'neon' should be invalid");
+        assert!(
+            settings.validate().is_err(),
+            "Theme 'neon' should be invalid"
+        );
     }
 
     #[test]
@@ -438,7 +484,10 @@ mod tests {
             language: "x".to_string(),
             ..UserSettings::default()
         };
-        assert!(settings.validate().is_err(), "1-char language code should fail");
+        assert!(
+            settings.validate().is_err(),
+            "1-char language code should fail"
+        );
     }
 
     #[test]
@@ -447,7 +496,10 @@ mod tests {
             language: "englsh".to_string(),
             ..UserSettings::default()
         };
-        assert!(settings.validate().is_err(), "6-char language code should fail");
+        assert!(
+            settings.validate().is_err(),
+            "6-char language code should fail"
+        );
     }
 
     #[test]
@@ -529,7 +581,10 @@ mod tests {
             current_password: "".to_string(),
             new_password: "NewPass456!".to_string(),
         };
-        assert!(req.validate().is_err(), "Empty current password should fail");
+        assert!(
+            req.validate().is_err(),
+            "Empty current password should fail"
+        );
     }
 
     #[test]
@@ -538,7 +593,10 @@ mod tests {
             current_password: "OldPass123!".to_string(),
             new_password: "short".to_string(),
         };
-        assert!(req.validate().is_err(), "New password under 8 chars should fail");
+        assert!(
+            req.validate().is_err(),
+            "New password under 8 chars should fail"
+        );
     }
 
     #[test]
@@ -547,7 +605,10 @@ mod tests {
             current_password: "OldPass123!".to_string(),
             new_password: "12345678".to_string(),
         };
-        assert!(req.validate().is_ok(), "Exactly 8 char password should pass");
+        assert!(
+            req.validate().is_ok(),
+            "Exactly 8 char password should pass"
+        );
     }
 
     // ---- AdminUserUpdateRequest validation ----
@@ -573,7 +634,10 @@ mod tests {
             is_active: None,
             email_verified: None,
         };
-        assert!(req.validate().is_err(), "Role 'superuser' should be invalid");
+        assert!(
+            req.validate().is_err(),
+            "Role 'superuser' should be invalid"
+        );
     }
 
     #[test]
@@ -599,7 +663,10 @@ mod tests {
             is_active: None,
             email_verified: None,
         };
-        assert!(req.validate().is_err(), "Invalid email should fail validation");
+        assert!(
+            req.validate().is_err(),
+            "Invalid email should fail validation"
+        );
     }
 
     #[test]
@@ -643,7 +710,10 @@ mod tests {
             new_email: None,
             new_password: Some("short".to_string()),
         };
-        assert!(changes.validate().is_err(), "New password under 8 chars should fail");
+        assert!(
+            changes.validate().is_err(),
+            "New password under 8 chars should fail"
+        );
     }
 
     #[test]
@@ -653,20 +723,27 @@ mod tests {
             new_email: None,
             new_password: None,
         };
-        assert!(changes.validate().is_err(), "Empty current password should fail");
+        assert!(
+            changes.validate().is_err(),
+            "Empty current password should fail"
+        );
     }
 
     // ---- RoleUpdateRequest validation ----
 
     #[test]
     fn test_role_update_valid() {
-        let req = RoleUpdateRequest { role: "editor".to_string() };
+        let req = RoleUpdateRequest {
+            role: "editor".to_string(),
+        };
         assert!(req.validate().is_ok());
     }
 
     #[test]
     fn test_role_update_invalid() {
-        let req = RoleUpdateRequest { role: "moderator".to_string() };
+        let req = RoleUpdateRequest {
+            role: "moderator".to_string(),
+        };
         assert!(req.validate().is_err());
     }
 
@@ -758,9 +835,14 @@ mod tests {
                 email_verified: true,
                 created_at: "".to_string(),
                 updated_at: "".to_string(),
-                phone: None, company: None, department: None,
-                position: None, username: None, profile_picture: None,
-                use_gravatar: None, location: None,
+                phone: None,
+                company: None,
+                department: None,
+                position: None,
+                username: None,
+                profile_picture: None,
+                use_gravatar: None,
+                location: None,
             }),
             message: None,
         };
@@ -881,7 +963,10 @@ mod tests {
             profile_picture: None,
         };
         let json = serde_json::to_string(&resp).unwrap();
-        assert!(!json.contains("profilePicture"), "None profilePicture should be skipped");
+        assert!(
+            !json.contains("profilePicture"),
+            "None profilePicture should be skipped"
+        );
     }
 }
 

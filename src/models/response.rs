@@ -55,17 +55,25 @@ mod tests {
         let err: serde_json::Value = serde_json::to_value(ErrorResponse {
             success: false,
             error: "test".to_string(),
-        }).unwrap();
+        })
+        .unwrap();
         assert!(err.get("success").is_some());
         assert!(err.get("error").is_some());
-        assert!(err.get("message").is_none(), "ErrorResponse should not have message field");
+        assert!(
+            err.get("message").is_none(),
+            "ErrorResponse should not have message field"
+        );
 
         let ok: serde_json::Value = serde_json::to_value(SuccessResponse {
             success: true,
             message: "test".to_string(),
-        }).unwrap();
+        })
+        .unwrap();
         assert!(ok.get("success").is_some());
         assert!(ok.get("message").is_some());
-        assert!(ok.get("error").is_none(), "SuccessResponse should not have error field");
+        assert!(
+            ok.get("error").is_none(),
+            "SuccessResponse should not have error field"
+        );
     }
 }

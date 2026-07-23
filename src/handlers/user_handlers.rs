@@ -1,43 +1,42 @@
 #![allow(dead_code)]
-use actix_web::{web, HttpRequest, HttpResponse, Result};
 use actix_multipart::Multipart;
+use actix_web::{web, HttpRequest, HttpResponse, Result};
+use bcrypt::{hash, verify as bcrypt_verify};
 use futures_util::TryStreamExt;
 use mongodb::bson::{doc, oid::ObjectId, DateTime};
-use bcrypt::{hash, verify as bcrypt_verify};
 use validator::Validate;
 
-use crate::models::user::{
-    UserProfileResponse, SettingsResponse, UserSettings,
-    SettingsUpdateRequest, ProfilePictureResponse,
-    PasswordChangeRequest, PasswordChangeResponse, UserSearchQuery,
-    UserSearchResponse, AdminUserUpdateRequest,
-    UserRolesResponse, RoleUpdateRequest,
-    UserActivityResponse, ActivityQuery,
-    DataExportResponse, UserDataExport, DataImportRequest, DataImportResponse
-};
+use crate::get_database;
+use crate::middleware::auth::extract_claims_from_request;
 use crate::models::response::{ErrorResponse, SuccessResponse};
+use crate::models::user::{
+    ActivityQuery, AdminUserUpdateRequest, DataExportResponse, DataImportRequest,
+    DataImportResponse, PasswordChangeRequest, PasswordChangeResponse, ProfilePictureResponse,
+    RoleUpdateRequest, SettingsResponse, SettingsUpdateRequest, UserActivityResponse,
+    UserDataExport, UserProfileResponse, UserRolesResponse, UserSearchQuery, UserSearchResponse,
+    UserSettings,
+};
 use crate::services::cache_service::{
-    get_cached_profile, cache_profile, invalidate_profile_cache,
-    get_cached_settings, cache_settings, invalidate_settings_cache
+    cache_profile, cache_settings, get_cached_profile, get_cached_settings,
+    invalidate_profile_cache, invalidate_settings_cache,
 };
 use crate::services::google_drive_service::upload_profile_picture;
-use crate::middleware::auth::extract_claims_from_request;
-use crate::get_database;
 use crate::utils::security::{generate_secure_password, validate_email};
 
 use super::helpers::{
-    standardize_user_doc, standardize_activity_doc, extract_user_basic_info,
-    is_admin, determine_target_user_id, get_role_definitions, get_permissions_for_role,
-    parse_pagination, compute_pagination_info,
-    build_search_filter, build_sort_doc, build_admin_lookup_filter,
-    build_activity_filter, build_admin_update_fields, build_settings_success_message,
+    build_activity_filter, build_admin_lookup_filter, build_admin_update_fields,
+    build_search_filter, build_settings_success_message, build_sort_doc, collect_validation_errors,
+    compute_pagination_info, determine_target_user_id, extract_user_basic_info,
+    get_permissions_for_role, get_role_definitions, is_admin, parse_object_id, parse_pagination,
+    profile_cache_key, settings_cache_key, standardize_activity_doc, standardize_user_doc,
     validate_file_size, validate_image_content_type,
-    profile_cache_key, settings_cache_key,
-    collect_validation_errors, parse_object_id,
 };
 
 // Get user profile endpoint (matches Node.js /api/users/profile exactly)
-pub async fn get_profile(req: HttpRequest, query: web::Query<serde_json::Value>) -> Result<HttpResponse> {
+pub async fn get_profile(
+    req: HttpRequest,
+    query: web::Query<serde_json::Value>,
+) -> Result<HttpResponse> {
     // Extract JWT claims from request
     let claims = match extract_claims_from_request(&req) {
         Ok(claims) => claims,
@@ -54,12 +53,16 @@ pub async fn get_profile(req: HttpRequest, query: web::Query<serde_json::Value>)
 
     // Determine target user (admin can lookup any user, regular users only themselves)
     let target_user_id = determine_target_user_id(
-        user_id, email, &claims.user_id, &claims.role, &claims.role_type,
+        user_id,
+        email,
+        &claims.user_id,
+        &claims.role,
+        &claims.role_type,
     );
 
     // Try cache first (15-minute cache like Node.js)
     let cache_key = profile_cache_key(&target_user_id);
-    
+
     if let Some(cached_profile) = get_cached_profile(&cache_key).await {
         log::info!("📦 Cache HIT for user profile: {}", target_user_id);
         return Ok(HttpResponse::Ok().json(UserProfileResponse {
@@ -69,7 +72,10 @@ pub async fn get_profile(req: HttpRequest, query: web::Query<serde_json::Value>)
         }));
     }
 
-    log::info!("🔍 Cache MISS for user profile: {} - fetching from database", target_user_id);
+    log::info!(
+        "🔍 Cache MISS for user profile: {} - fetching from database",
+        target_user_id
+    );
 
     // Connect to MongoDB
     let db = match get_database().await {
@@ -86,41 +92,48 @@ pub async fn get_profile(req: HttpRequest, query: web::Query<serde_json::Value>)
     let users_collection = db.collection::<mongodb::bson::Document>("users");
 
     // Find user (admin lookup logic matches Node.js exactly)
-    let user = if (user_id.is_some() || email.is_some()) && is_admin(&claims.role, &claims.role_type) {
-        let filter = match build_admin_lookup_filter(user_id, email, &claims.user_id) {
-            Ok(f) => f,
-            Err(e) => {
-                return Ok(HttpResponse::BadRequest().json(ErrorResponse {
-                    success: false,
-                    error: e,
-                }));
-            }
-        };
+    let user =
+        if (user_id.is_some() || email.is_some()) && is_admin(&claims.role, &claims.role_type) {
+            let filter = match build_admin_lookup_filter(user_id, email, &claims.user_id) {
+                Ok(f) => f,
+                Err(e) => {
+                    return Ok(HttpResponse::BadRequest().json(ErrorResponse {
+                        success: false,
+                        error: e,
+                    }));
+                }
+            };
 
-        users_collection.find_one(
-            filter,
-            mongodb::options::FindOneOptions::builder()
-                .projection(doc! { "password": 0, "resetToken": 0, "resetTokenExpiry": 0 })
-                .build()
-        ).await.unwrap_or(None)
-    } else {
-        // Regular user can only see their own profile
-        let oid = match parse_object_id(&claims.user_id) {
-            Ok(oid) => oid,
-            Err(e) => {
-                return Ok(HttpResponse::BadRequest().json(ErrorResponse {
-                    success: false,
-                    error: e,
-                }));
-            }
+            users_collection
+                .find_one(
+                    filter,
+                    mongodb::options::FindOneOptions::builder()
+                        .projection(doc! { "password": 0, "resetToken": 0, "resetTokenExpiry": 0 })
+                        .build(),
+                )
+                .await
+                .unwrap_or(None)
+        } else {
+            // Regular user can only see their own profile
+            let oid = match parse_object_id(&claims.user_id) {
+                Ok(oid) => oid,
+                Err(e) => {
+                    return Ok(HttpResponse::BadRequest().json(ErrorResponse {
+                        success: false,
+                        error: e,
+                    }));
+                }
+            };
+            users_collection
+                .find_one(
+                    doc! { "_id": oid },
+                    mongodb::options::FindOneOptions::builder()
+                        .projection(doc! { "password": 0, "resetToken": 0, "resetTokenExpiry": 0 })
+                        .build(),
+                )
+                .await
+                .unwrap_or(None)
         };
-        users_collection.find_one(
-            doc! { "_id": oid },
-            mongodb::options::FindOneOptions::builder()
-                .projection(doc! { "password": 0, "resetToken": 0, "resetTokenExpiry": 0 })
-                .build()
-        ).await.unwrap_or(None)
-    };
 
     let user = match user {
         Some(u) => u,
@@ -170,14 +183,17 @@ pub async fn get_settings(req: HttpRequest) -> Result<HttpResponse> {
 
     // Generate cache key for user settings
     let cache_key = settings_cache_key(&claims.user_id);
-    
+
     // Try cache first (30-minute cache like Node.js)
     if let Some(cached_settings) = get_cached_settings(&cache_key).await {
         log::info!("📦 Cache HIT for user settings: {}", claims.user_id);
         return Ok(HttpResponse::Ok().json(cached_settings));
     }
-    
-    log::info!("🔍 Cache MISS for user settings: {} - fetching from database", claims.user_id);
+
+    log::info!(
+        "🔍 Cache MISS for user settings: {} - fetching from database",
+        claims.user_id
+    );
 
     // Connect to MongoDB
     let db = match get_database().await {
@@ -195,22 +211,23 @@ pub async fn get_settings(req: HttpRequest) -> Result<HttpResponse> {
 
     // Get user with settings
     let user = match ObjectId::parse_str(&claims.user_id) {
-        Ok(oid) => {
-            users_collection.find_one(
+        Ok(oid) => users_collection
+            .find_one(
                 doc! { "_id": oid },
                 mongodb::options::FindOneOptions::builder()
-                    .projection(doc! { 
-                        "settings": 1, 
-                        "email": 1, 
-                        "name": 1, 
-                        "role": 1, 
-                        "profilePicture": 1, 
-                        "useGravatar": 1, 
-                        "location": 1 
+                    .projection(doc! {
+                        "settings": 1,
+                        "email": 1,
+                        "name": 1,
+                        "role": 1,
+                        "profilePicture": 1,
+                        "useGravatar": 1,
+                        "location": 1
                     })
-                    .build()
-            ).await.unwrap_or(None)
-        }
+                    .build(),
+            )
+            .await
+            .unwrap_or(None),
         Err(_) => {
             return Ok(HttpResponse::BadRequest().json(ErrorResponse {
                 success: false,
@@ -263,7 +280,10 @@ pub async fn get_settings(req: HttpRequest) -> Result<HttpResponse> {
 }
 
 // Update user settings endpoint (matches Node.js /api/users/settings PUT exactly)
-pub async fn update_settings(req: HttpRequest, body: web::Json<SettingsUpdateRequest>) -> Result<HttpResponse> {
+pub async fn update_settings(
+    req: HttpRequest,
+    body: web::Json<SettingsUpdateRequest>,
+) -> Result<HttpResponse> {
     // Validate input data
     if let Err(validation_errors) = body.validate() {
         return Ok(HttpResponse::BadRequest().json(ErrorResponse {
@@ -301,14 +321,15 @@ pub async fn update_settings(req: HttpRequest, body: web::Json<SettingsUpdateReq
     if let Some(account_changes) = &body.account_changes {
         // Get current user to verify password
         let current_user = match ObjectId::parse_str(&claims.user_id) {
-            Ok(oid) => {
-                users_collection.find_one(
+            Ok(oid) => users_collection
+                .find_one(
                     doc! { "_id": oid },
                     mongodb::options::FindOneOptions::builder()
                         .projection(doc! { "password": 1, "email": 1 })
-                        .build()
-                ).await.unwrap_or(None)
-            }
+                        .build(),
+                )
+                .await
+                .unwrap_or(None),
             Err(_) => {
                 return Ok(HttpResponse::BadRequest().json(ErrorResponse {
                     success: false,
@@ -349,14 +370,17 @@ pub async fn update_settings(req: HttpRequest, body: web::Json<SettingsUpdateReq
                         }));
                     }
                 };
-                let email_exists = users_collection.find_one(
-                    doc! {
-                        "email": new_email.to_lowercase(),
-                        "_id": { "$ne": current_oid }
-                    },
-                    None
-                ).await.unwrap_or(None);
-                
+                let email_exists = users_collection
+                    .find_one(
+                        doc! {
+                            "email": new_email.to_lowercase(),
+                            "_id": { "$ne": current_oid }
+                        },
+                        None,
+                    )
+                    .await
+                    .unwrap_or(None);
+
                 if email_exists.is_some() {
                     return Ok(HttpResponse::BadRequest().json(ErrorResponse {
                         success: false,
@@ -376,11 +400,11 @@ pub async fn update_settings(req: HttpRequest, body: web::Json<SettingsUpdateReq
     // Update user name if provided in settings
     if let Some(user_info) = &body.settings.user {
         update_doc.insert("name", &user_info.name);
-        
+
         if let Some(location) = &user_info.location {
             update_doc.insert("location", location);
         }
-        
+
         if let Some(use_gravatar) = user_info.use_gravatar {
             update_doc.insert("useGravatar", use_gravatar);
         }
@@ -409,11 +433,9 @@ pub async fn update_settings(req: HttpRequest, body: web::Json<SettingsUpdateReq
     // Update user settings
     let result = match ObjectId::parse_str(&claims.user_id) {
         Ok(oid) => {
-            users_collection.update_one(
-                doc! { "_id": oid },
-                doc! { "$set": update_doc },
-                None
-            ).await
+            users_collection
+                .update_one(doc! { "_id": oid }, doc! { "$set": update_doc }, None)
+                .await
         }
         Err(_) => {
             return Ok(HttpResponse::BadRequest().json(ErrorResponse {
@@ -447,8 +469,14 @@ pub async fn update_settings(req: HttpRequest, body: web::Json<SettingsUpdateReq
     log::info!("🗑️ Invalidated settings cache for user: {}", claims.user_id);
 
     // Build success message (matches Node.js logic)
-    let email_changed = body.account_changes.as_ref().is_some_and(|ac| ac.new_email.is_some());
-    let password_changed = body.account_changes.as_ref().is_some_and(|ac| ac.new_password.is_some());
+    let email_changed = body
+        .account_changes
+        .as_ref()
+        .is_some_and(|ac| ac.new_email.is_some());
+    let password_changed = body
+        .account_changes
+        .as_ref()
+        .is_some_and(|ac| ac.new_password.is_some());
     let success_message = build_settings_success_message(email_changed, password_changed);
 
     Ok(HttpResponse::Ok().json(SuccessResponse {
@@ -458,7 +486,10 @@ pub async fn update_settings(req: HttpRequest, body: web::Json<SettingsUpdateReq
 }
 
 // Update profile picture endpoint (matches Node.js /api/users/profile-picture exactly)
-pub async fn update_profile_picture(req: HttpRequest, mut payload: Multipart) -> Result<HttpResponse> {
+pub async fn update_profile_picture(
+    req: HttpRequest,
+    mut payload: Multipart,
+) -> Result<HttpResponse> {
     // Extract JWT claims from request
     let claims = match extract_claims_from_request(&req) {
         Ok(claims) => claims,
@@ -477,15 +508,15 @@ pub async fn update_profile_picture(req: HttpRequest, mut payload: Multipart) ->
 
     while let Some(mut field) = payload.try_next().await.unwrap_or(None) {
         let field_name = field.name().unwrap_or("unknown").to_string();
-        
+
         if field_name == "profilePicture" {
             let mut data = Vec::new();
-            
+
             // Read file data
             while let Some(chunk) = field.try_next().await.unwrap_or(None) {
                 data.extend_from_slice(&chunk);
             }
-            
+
             // Validate file size (5MB max, same as Node.js)
             if let Err(e) = validate_file_size(data.len(), 5 * 1024 * 1024) {
                 return Ok(HttpResponse::BadRequest().json(ErrorResponse {
@@ -498,7 +529,7 @@ pub async fn update_profile_picture(req: HttpRequest, mut payload: Multipart) ->
             if let Some(content_disposition) = field.content_disposition() {
                 file_name = content_disposition.get_filename().map(|f| f.to_string());
             }
-            
+
             content_type = field.content_type().map(|ct| ct.to_string());
             file_data = Some(data);
             break;
@@ -541,14 +572,15 @@ pub async fn update_profile_picture(req: HttpRequest, mut payload: Multipart) ->
 
     // Get user email for Google Drive folder reference
     let user = match ObjectId::parse_str(&claims.user_id) {
-        Ok(oid) => {
-            users_collection.find_one(
+        Ok(oid) => users_collection
+            .find_one(
                 doc! { "_id": oid },
                 mongodb::options::FindOneOptions::builder()
                     .projection(doc! { "email": 1 })
-                    .build()
-            ).await.unwrap_or(None)
-        }
+                    .build(),
+            )
+            .await
+            .unwrap_or(None),
         Err(_) => {
             return Ok(HttpResponse::BadRequest().json(ErrorResponse {
                 success: false,
@@ -572,8 +604,10 @@ pub async fn update_profile_picture(req: HttpRequest, mut payload: Multipart) ->
         &claims.user_id,
         user.get_str("email").unwrap_or(""),
         file_data,
-        &file_name
-    ).await {
+        &file_name,
+    )
+    .await
+    {
         Ok(url) => url,
         Err(e) => {
             log::error!("Profile picture upload error: {}", e);
@@ -587,17 +621,19 @@ pub async fn update_profile_picture(req: HttpRequest, mut payload: Multipart) ->
     // Update user's profile picture
     let result = match ObjectId::parse_str(&claims.user_id) {
         Ok(oid) => {
-            users_collection.update_one(
-                doc! { "_id": oid },
-                doc! { 
-                    "$set": { 
-                        "profilePicture": &profile_picture_url,
-                        "useGravatar": false, // User uploaded a custom picture
-                        "updatedAt": DateTime::now()
-                    } 
-                },
-                None
-            ).await
+            users_collection
+                .update_one(
+                    doc! { "_id": oid },
+                    doc! {
+                        "$set": {
+                            "profilePicture": &profile_picture_url,
+                            "useGravatar": false, // User uploaded a custom picture
+                            "updatedAt": DateTime::now()
+                        }
+                    },
+                    None,
+                )
+                .await
         }
         Err(_) => {
             return Ok(HttpResponse::BadRequest().json(ErrorResponse {
@@ -638,7 +674,10 @@ pub async fn update_profile_picture(req: HttpRequest, mut payload: Multipart) ->
 }
 
 // Change password endpoint (matches Node.js /api/users/change-password exactly)
-pub async fn change_password(req: HttpRequest, body: web::Json<PasswordChangeRequest>) -> Result<HttpResponse> {
+pub async fn change_password(
+    req: HttpRequest,
+    body: web::Json<PasswordChangeRequest>,
+) -> Result<HttpResponse> {
     // Validate input data
     if let Err(validation_errors) = body.validate() {
         return Ok(HttpResponse::BadRequest().json(ErrorResponse {
@@ -674,14 +713,15 @@ pub async fn change_password(req: HttpRequest, body: web::Json<PasswordChangeReq
 
     // Get current user to verify password
     let current_user = match ObjectId::parse_str(&claims.user_id) {
-        Ok(oid) => {
-            users_collection.find_one(
+        Ok(oid) => users_collection
+            .find_one(
                 doc! { "_id": oid },
                 mongodb::options::FindOneOptions::builder()
                     .projection(doc! { "password": 1, "email": 1 })
-                    .build()
-            ).await.unwrap_or(None)
-        }
+                    .build(),
+            )
+            .await
+            .unwrap_or(None),
         Err(_) => {
             return Ok(HttpResponse::BadRequest().json(ErrorResponse {
                 success: false,
@@ -724,16 +764,18 @@ pub async fn change_password(req: HttpRequest, body: web::Json<PasswordChangeReq
     // Update user password
     let result = match ObjectId::parse_str(&claims.user_id) {
         Ok(oid) => {
-            users_collection.update_one(
-                doc! { "_id": oid },
-                doc! { 
-                    "$set": { 
-                        "password": new_password_hash,
-                        "updatedAt": DateTime::now()
-                    } 
-                },
-                None
-            ).await
+            users_collection
+                .update_one(
+                    doc! { "_id": oid },
+                    doc! {
+                        "$set": {
+                            "password": new_password_hash,
+                            "updatedAt": DateTime::now()
+                        }
+                    },
+                    None,
+                )
+                .await
         }
         Err(_) => {
             return Ok(HttpResponse::BadRequest().json(ErrorResponse {
@@ -799,19 +841,21 @@ pub async fn delete_avatar(req: HttpRequest) -> Result<HttpResponse> {
     // Update user to remove profile picture and enable Gravatar
     let result = match ObjectId::parse_str(&claims.user_id) {
         Ok(oid) => {
-            users_collection.update_one(
-                doc! { "_id": oid },
-                doc! { 
-                    "$set": { 
-                        "useGravatar": true, // Fallback to Gravatar when custom avatar is deleted
-                        "updatedAt": DateTime::now()
+            users_collection
+                .update_one(
+                    doc! { "_id": oid },
+                    doc! {
+                        "$set": {
+                            "useGravatar": true, // Fallback to Gravatar when custom avatar is deleted
+                            "updatedAt": DateTime::now()
+                        },
+                        "$unset": {
+                            "profilePicture": "" // Remove custom profile picture
+                        }
                     },
-                    "$unset": {
-                        "profilePicture": "" // Remove custom profile picture
-                    }
-                },
-                None
-            ).await
+                    None,
+                )
+                .await
         }
         Err(_) => {
             return Ok(HttpResponse::BadRequest().json(ErrorResponse {
@@ -842,7 +886,10 @@ pub async fn delete_avatar(req: HttpRequest) -> Result<HttpResponse> {
     // Bust cache for this user since they deleted their avatar
     let cache_key = profile_cache_key(&claims.user_id);
     let _ = invalidate_profile_cache(&cache_key).await;
-    log::info!("🗑️ Invalidated profile cache for user: {} (avatar deleted)", claims.user_id);
+    log::info!(
+        "🗑️ Invalidated profile cache for user: {} (avatar deleted)",
+        claims.user_id
+    );
 
     Ok(HttpResponse::Ok().json(SuccessResponse {
         success: true,
@@ -851,7 +898,10 @@ pub async fn delete_avatar(req: HttpRequest) -> Result<HttpResponse> {
 }
 
 // Admin user search endpoint (matches Node.js /api/admin/users GET exactly)
-pub async fn admin_search_users(req: HttpRequest, query: web::Query<UserSearchQuery>) -> Result<HttpResponse> {
+pub async fn admin_search_users(
+    req: HttpRequest,
+    query: web::Query<UserSearchQuery>,
+) -> Result<HttpResponse> {
     // Extract JWT claims from request
     let claims = match extract_claims_from_request(&req) {
         Ok(claims) => claims,
@@ -895,16 +945,22 @@ pub async fn admin_search_users(req: HttpRequest, query: web::Query<UserSearchQu
     let sort_doc = build_sort_doc(query.sort.as_deref(), query.order.as_deref());
 
     // Get total count for pagination
-    let total = users_collection.count_documents(filter.clone(), None).await.unwrap_or(0);
+    let total = users_collection
+        .count_documents(filter.clone(), None)
+        .await
+        .unwrap_or(0);
 
     // Execute search with pagination
     let mut cursor = users_collection
-        .find(filter, mongodb::options::FindOptions::builder()
-            .projection(doc! { "password": 0, "resetToken": 0, "resetTokenExpiry": 0 })
-            .sort(sort_doc)
-            .skip(skip)
-            .limit(limit as i64)
-            .build())
+        .find(
+            filter,
+            mongodb::options::FindOptions::builder()
+                .projection(doc! { "password": 0, "resetToken": 0, "resetTokenExpiry": 0 })
+                .sort(sort_doc)
+                .skip(skip)
+                .limit(limit as i64)
+                .build(),
+        )
         .await
         .map_err(|e| {
             log::error!("User search query failed: {}", e);
@@ -921,7 +977,12 @@ pub async fn admin_search_users(req: HttpRequest, query: web::Query<UserSearchQu
 
     let pagination = compute_pagination_info(page, limit, total);
 
-    log::info!("Admin user search completed: {} users found (page {}/{})", users.len(), page, pagination.total_pages);
+    log::info!(
+        "Admin user search completed: {} users found (page {}/{})",
+        users.len(),
+        page,
+        pagination.total_pages
+    );
 
     Ok(HttpResponse::Ok().json(UserSearchResponse {
         success: true,
@@ -932,7 +993,11 @@ pub async fn admin_search_users(req: HttpRequest, query: web::Query<UserSearchQu
 }
 
 // Admin update user endpoint (matches Node.js /api/admin/users/:id PUT exactly)
-pub async fn admin_update_user(req: HttpRequest, path: web::Path<String>, body: web::Json<AdminUserUpdateRequest>) -> Result<HttpResponse> {
+pub async fn admin_update_user(
+    req: HttpRequest,
+    path: web::Path<String>,
+    body: web::Json<AdminUserUpdateRequest>,
+) -> Result<HttpResponse> {
     // Validate input data
     if let Err(validation_errors) = body.validate() {
         return Ok(HttpResponse::BadRequest().json(ErrorResponse {
@@ -988,14 +1053,17 @@ pub async fn admin_update_user(req: HttpRequest, path: web::Path<String>, body: 
             }
         };
 
-        let email_exists = users_collection.find_one(
-            doc! { 
-                "email": new_email.to_lowercase(),
-                "_id": { "$ne": user_id_obj }
-            },
-            None
-        ).await.unwrap_or(None);
-        
+        let email_exists = users_collection
+            .find_one(
+                doc! {
+                    "email": new_email.to_lowercase(),
+                    "_id": { "$ne": user_id_obj }
+                },
+                None,
+            )
+            .await
+            .unwrap_or(None);
+
         if email_exists.is_some() {
             return Ok(HttpResponse::BadRequest().json(ErrorResponse {
                 success: false,
@@ -1010,11 +1078,9 @@ pub async fn admin_update_user(req: HttpRequest, path: web::Path<String>, body: 
     // Update user
     let result = match parse_object_id(&user_id) {
         Ok(oid) => {
-            users_collection.update_one(
-                doc! { "_id": oid },
-                doc! { "$set": update_doc },
-                None
-            ).await
+            users_collection
+                .update_one(doc! { "_id": oid }, doc! { "$set": update_doc }, None)
+                .await
         }
         Err(_) => {
             return Ok(HttpResponse::BadRequest().json(ErrorResponse {
@@ -1045,9 +1111,16 @@ pub async fn admin_update_user(req: HttpRequest, path: web::Path<String>, body: 
     // Invalidate cache for the updated user
     let cache_key = profile_cache_key(&user_id);
     let _ = invalidate_profile_cache(&cache_key).await;
-    log::info!("🗑️ Invalidated profile cache for user: {} (admin update)", user_id);
+    log::info!(
+        "🗑️ Invalidated profile cache for user: {} (admin update)",
+        user_id
+    );
 
-    log::info!("Admin updated user: {} by admin: {}", user_id, claims.user_id);
+    log::info!(
+        "Admin updated user: {} by admin: {}",
+        user_id,
+        claims.user_id
+    );
 
     Ok(HttpResponse::Ok().json(SuccessResponse {
         success: true,
@@ -1085,7 +1158,10 @@ pub async fn get_user_roles(req: HttpRequest) -> Result<HttpResponse> {
 }
 
 // Update user role (PUT /api/users/roles)
-pub async fn update_user_role(req: HttpRequest, body: web::Json<RoleUpdateRequest>) -> Result<HttpResponse> {
+pub async fn update_user_role(
+    req: HttpRequest,
+    body: web::Json<RoleUpdateRequest>,
+) -> Result<HttpResponse> {
     // Validate input data
     if let Err(validation_errors) = body.validate() {
         return Ok(HttpResponse::BadRequest().json(ErrorResponse {
@@ -1130,16 +1206,18 @@ pub async fn update_user_role(req: HttpRequest, body: web::Json<RoleUpdateReques
     // Update user role
     let result = match ObjectId::parse_str(&claims.user_id) {
         Ok(oid) => {
-            users_collection.update_one(
-                doc! { "_id": oid },
-                doc! {
-                    "$set": {
-                        "role": &body.role,
-                        "updatedAt": DateTime::now()
-                    }
-                },
-                None
-            ).await
+            users_collection
+                .update_one(
+                    doc! { "_id": oid },
+                    doc! {
+                        "$set": {
+                            "role": &body.role,
+                            "updatedAt": DateTime::now()
+                        }
+                    },
+                    None,
+                )
+                .await
         }
         Err(_) => {
             return Ok(HttpResponse::BadRequest().json(ErrorResponse {
@@ -1178,7 +1256,10 @@ pub async fn update_user_role(req: HttpRequest, body: web::Json<RoleUpdateReques
 }
 
 // Get user activity logs (GET /api/users/activity)
-pub async fn get_user_activity(req: HttpRequest, query: web::Query<ActivityQuery>) -> Result<HttpResponse> {
+pub async fn get_user_activity(
+    req: HttpRequest,
+    query: web::Query<ActivityQuery>,
+) -> Result<HttpResponse> {
     // Extract JWT claims from request
     let claims = match extract_claims_from_request(&req) {
         Ok(claims) => claims,
@@ -1216,15 +1297,21 @@ pub async fn get_user_activity(req: HttpRequest, query: web::Query<ActivityQuery
     );
 
     // Get total count for pagination
-    let total = activity_collection.count_documents(filter.clone(), None).await.unwrap_or(0);
+    let total = activity_collection
+        .count_documents(filter.clone(), None)
+        .await
+        .unwrap_or(0);
 
     // Execute query with pagination
     let mut cursor = activity_collection
-        .find(filter, mongodb::options::FindOptions::builder()
-            .sort(doc! { "timestamp": -1 })
-            .skip(skip)
-            .limit(limit as i64)
-            .build())
+        .find(
+            filter,
+            mongodb::options::FindOptions::builder()
+                .sort(doc! { "timestamp": -1 })
+                .skip(skip)
+                .limit(limit as i64)
+                .build(),
+        )
         .await
         .map_err(|e| {
             log::error!("Activity query failed: {}", e);
@@ -1240,7 +1327,11 @@ pub async fn get_user_activity(req: HttpRequest, query: web::Query<ActivityQuery
 
     let pagination = compute_pagination_info(page, limit, total);
 
-    log::info!("Retrieved {} activities for user: {}", activities.len(), claims.user_id);
+    log::info!(
+        "Retrieved {} activities for user: {}",
+        activities.len(),
+        claims.user_id
+    );
 
     Ok(HttpResponse::Ok().json(UserActivityResponse {
         success: true,
@@ -1280,14 +1371,15 @@ pub async fn export_user_data(req: HttpRequest) -> Result<HttpResponse> {
 
     // Get user data
     let user = match ObjectId::parse_str(&claims.user_id) {
-        Ok(oid) => {
-            users_collection.find_one(
+        Ok(oid) => users_collection
+            .find_one(
                 doc! { "_id": oid },
                 mongodb::options::FindOneOptions::builder()
                     .projection(doc! { "password": 0, "resetToken": 0, "resetTokenExpiry": 0 })
-                    .build()
-            ).await.unwrap_or(None)
-        }
+                    .build(),
+            )
+            .await
+            .unwrap_or(None),
         Err(_) => {
             return Ok(HttpResponse::BadRequest().json(ErrorResponse {
                 success: false,
@@ -1332,7 +1424,7 @@ pub async fn export_user_data(req: HttpRequest) -> Result<HttpResponse> {
             mongodb::options::FindOptions::builder()
                 .sort(doc! { "timestamp": -1 })
                 .limit(100)
-                .build()
+                .build(),
         )
         .await
         .map_err(|e| {
@@ -1365,7 +1457,10 @@ pub async fn export_user_data(req: HttpRequest) -> Result<HttpResponse> {
 }
 
 // Import user data (POST /api/users/import - Admin only)
-pub async fn import_user_data(req: HttpRequest, body: web::Json<DataImportRequest>) -> Result<HttpResponse> {
+pub async fn import_user_data(
+    req: HttpRequest,
+    body: web::Json<DataImportRequest>,
+) -> Result<HttpResponse> {
     // Extract JWT claims from request
     let claims = match extract_claims_from_request(&req) {
         Ok(claims) => claims,
@@ -1408,10 +1503,10 @@ pub async fn import_user_data(req: HttpRequest, body: web::Json<DataImportReques
     let users_collection = db.collection::<mongodb::bson::Document>("users");
 
     // Check if user already exists
-    let existing_user = users_collection.find_one(
-        doc! { "email": body.data.email.to_lowercase() },
-        None
-    ).await.unwrap_or(None);
+    let existing_user = users_collection
+        .find_one(doc! { "email": body.data.email.to_lowercase() }, None)
+        .await
+        .unwrap_or(None);
 
     if existing_user.is_some() {
         return Ok(HttpResponse::BadRequest().json(DataImportResponse {
@@ -1458,7 +1553,11 @@ pub async fn import_user_data(req: HttpRequest, body: web::Json<DataImportReques
     // Insert user
     match users_collection.insert_one(user_doc, None).await {
         Ok(_) => {
-            log::info!("Imported user: {} by admin: {}", body.data.email, claims.user_id);
+            log::info!(
+                "Imported user: {} by admin: {}",
+                body.data.email,
+                claims.user_id
+            );
 
             Ok(HttpResponse::Ok().json(DataImportResponse {
                 success: true,
@@ -1470,14 +1569,15 @@ pub async fn import_user_data(req: HttpRequest, body: web::Json<DataImportReques
         }
         Err(e) => {
             log::error!("Failed to import user: {}", e);
-            Ok(HttpResponse::InternalServerError().json(DataImportResponse {
-                success: false,
-                imported_count: 0,
-                failed_count: 1,
-                errors: vec![format!("Database error: {}", e)],
-                message: "Import failed".to_string(),
-            }))
+            Ok(
+                HttpResponse::InternalServerError().json(DataImportResponse {
+                    success: false,
+                    imported_count: 0,
+                    failed_count: 1,
+                    errors: vec![format!("Database error: {}", e)],
+                    message: "Import failed".to_string(),
+                }),
+            )
         }
     }
 }
-

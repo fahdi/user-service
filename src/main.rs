@@ -1,14 +1,14 @@
-use actix_web::{web, App, HttpServer, middleware::Logger};
-use std::env;
+use actix_web::{middleware::Logger, web, App, HttpServer};
 use mongodb::bson::Document;
+use std::env;
 
 use user_service::{
-    health, init_mongodb_client, init_redis_pool,
     handlers::di_handlers::{
-        get_profile, update_profile_picture, get_settings, update_settings, change_password,
-        delete_avatar, admin_search_users, admin_update_user, get_user_roles, update_user_role,
-        get_user_activity, export_user_data, import_user_data,
+        admin_search_users, admin_update_user, change_password, delete_avatar, export_user_data,
+        get_profile, get_settings, get_user_activity, get_user_roles, import_user_data,
+        update_profile_picture, update_settings, update_user_role,
     },
+    health, init_mongodb_client, init_redis_pool,
 };
 
 // Phase 4: Database index creation for user service optimization
@@ -25,7 +25,7 @@ async fn create_database_indexes() -> Result<(), Box<dyn std::error::Error>> {
             mongodb::options::IndexOptions::builder()
                 .unique(true)
                 .name("email_unique_idx".to_string())
-                .build()
+                .build(),
         )
         .build();
 
@@ -36,7 +36,7 @@ async fn create_database_indexes() -> Result<(), Box<dyn std::error::Error>> {
             mongodb::options::IndexOptions::builder()
                 .sparse(true)
                 .name("profile_picture_sparse_idx".to_string())
-                .build()
+                .build(),
         )
         .build();
 
@@ -47,7 +47,7 @@ async fn create_database_indexes() -> Result<(), Box<dyn std::error::Error>> {
             mongodb::options::IndexOptions::builder()
                 .sparse(true)
                 .name("settings_sparse_idx".to_string())
-                .build()
+                .build(),
         )
         .build();
 
@@ -57,7 +57,7 @@ async fn create_database_indexes() -> Result<(), Box<dyn std::error::Error>> {
         .options(
             mongodb::options::IndexOptions::builder()
                 .name("updated_at_desc_idx".to_string())
-                .build()
+                .build(),
         )
         .build();
 
@@ -71,16 +71,22 @@ async fn create_database_indexes() -> Result<(), Box<dyn std::error::Error>> {
 
     match users.create_indexes(indexes, None).await {
         Ok(result) => {
-            log::info!("Successfully created {} user service indexes", result.index_names.len());
+            log::info!(
+                "Successfully created {} user service indexes",
+                result.index_names.len()
+            );
             for index_name in result.index_names {
                 log::info!("  User service index created: {}", index_name);
             }
         }
         Err(e) => {
-            if e.to_string().contains("already exists") {
+            if user_service::utils::is_index_conflict(&e.to_string()) {
                 log::info!("User service indexes already exist (this is normal)");
             } else {
-                log::warn!("Failed to create some user service indexes: {} (service will still work)", e);
+                log::warn!(
+                    "Failed to create some user service indexes: {} (service will still work)",
+                    e
+                );
             }
         }
     }
@@ -106,7 +112,10 @@ async fn main() -> std::io::Result<()> {
     // Initialize Redis connection pool at startup
     log::info!("Initializing Redis connection pool...");
     if let Err(e) = init_redis_pool().await {
-        log::warn!("Failed to initialize Redis pool: {} - Redis caching disabled", e);
+        log::warn!(
+            "Failed to initialize Redis pool: {} - Redis caching disabled",
+            e
+        );
     } else {
         log::info!("Redis connection pool initialized successfully");
     }
@@ -114,7 +123,10 @@ async fn main() -> std::io::Result<()> {
     // Phase 4: Create database indexes for optimal performance
     log::info!("Setting up user service database indexes...");
     if let Err(e) = create_database_indexes().await {
-        log::warn!("Failed to create user service indexes: {} - Performance may be reduced", e);
+        log::warn!(
+            "Failed to create user service indexes: {} - Performance may be reduced",
+            e
+        );
     } else {
         log::info!("User service database indexes configured successfully");
     }
@@ -139,12 +151,12 @@ async fn main() -> std::io::Result<()> {
                     .route("/roles", web::put().to(update_user_role))
                     .route("/activity", web::get().to(get_user_activity))
                     .route("/export", web::get().to(export_user_data))
-                    .route("/import", web::post().to(import_user_data))
+                    .route("/import", web::post().to(import_user_data)),
             )
             .service(
                 web::scope("/api/admin/users")
                     .route("", web::get().to(admin_search_users))
-                    .route("/{id}", web::put().to(admin_update_user))
+                    .route("/{id}", web::put().to(admin_update_user)),
             )
     })
     .bind(format!("0.0.0.0:{}", port))?

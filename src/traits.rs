@@ -7,7 +7,7 @@
 use async_trait::async_trait;
 use mongodb::bson::Document;
 
-use crate::models::user::{StandardizedUser, SettingsResponse};
+use crate::models::user::{SettingsResponse, StandardizedUser};
 
 // ---------------------------------------------------------------------------
 // User repository (MongoDB abstraction)
@@ -40,11 +40,7 @@ pub trait UserRepository: Send + Sync {
 
     /// Update a single user matching `filter` with an update document.
     /// Returns the number of matched documents.
-    async fn update_user(
-        &self,
-        filter: Document,
-        update: Document,
-    ) -> RepoResult<u64>;
+    async fn update_user(&self, filter: Document, update: Document) -> RepoResult<u64>;
 
     /// Count documents matching `filter` in the users collection.
     async fn count_users(&self, filter: Document) -> RepoResult<u64>;
