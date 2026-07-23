@@ -17,25 +17,37 @@ fn build_validation() -> Validation {
 }
 
 // Simple JWT extractor for handlers
-pub fn extract_claims_from_request(req: &actix_web::HttpRequest) -> Result<Claims, actix_web::Error> {
-    let auth_header = req.headers()
+pub fn extract_claims_from_request(
+    req: &actix_web::HttpRequest,
+) -> Result<Claims, actix_web::Error> {
+    let auth_header = req
+        .headers()
         .get("authorization")
         .and_then(|h| h.to_str().ok())
         .ok_or_else(|| actix_web::error::ErrorUnauthorized("Authorization header missing"))?;
 
     if !auth_header.starts_with("Bearer ") {
-        return Err(actix_web::error::ErrorUnauthorized("Invalid authorization format"));
+        return Err(actix_web::error::ErrorUnauthorized(
+            "Invalid authorization format",
+        ));
     }
 
     let token = &auth_header[7..];
-    let jwt_secret = env::var("JWT_SECRET")
-        .expect("JWT_SECRET environment variable must be set — refusing to start with insecure default");
+    let jwt_secret = env::var("JWT_SECRET").expect(
+        "JWT_SECRET environment variable must be set — refusing to start with insecure default",
+    );
 
     let validation = build_validation();
 
-    match decode::<Claims>(token, &DecodingKey::from_secret(jwt_secret.as_ref()), &validation) {
+    match decode::<Claims>(
+        token,
+        &DecodingKey::from_secret(jwt_secret.as_ref()),
+        &validation,
+    ) {
         Ok(token_data) => Ok(token_data.claims),
-        Err(_) => Err(actix_web::error::ErrorUnauthorized("Invalid or expired token")),
+        Err(_) => Err(actix_web::error::ErrorUnauthorized(
+            "Invalid or expired token",
+        )),
     }
 }
 
@@ -78,10 +90,19 @@ mod tests {
             exp: (chrono::Utc::now() + chrono::Duration::hours(1)).timestamp() as usize,
         };
 
-        let token = encode(&Header::default(), &issued, &EncodingKey::from_secret(secret.as_bytes())).unwrap();
+        let token = encode(
+            &Header::default(),
+            &issued,
+            &EncodingKey::from_secret(secret.as_bytes()),
+        )
+        .unwrap();
 
-        let data = decode::<Claims>(&token, &DecodingKey::from_secret(secret.as_bytes()), &build_validation())
-            .expect("must accept a token shaped like auth-service's real output");
+        let data = decode::<Claims>(
+            &token,
+            &DecodingKey::from_secret(secret.as_bytes()),
+            &build_validation(),
+        )
+        .expect("must accept a token shaped like auth-service's real output");
         assert_eq!(data.claims.user_id, "user-42");
     }
 
@@ -103,10 +124,19 @@ mod tests {
             aud: "some-other-api".to_string(),
             exp: (chrono::Utc::now() + chrono::Duration::hours(1)).timestamp() as usize,
         };
-        let token = encode(&Header::default(), &issued, &EncodingKey::from_secret(secret.as_bytes())).unwrap();
+        let token = encode(
+            &Header::default(),
+            &issued,
+            &EncodingKey::from_secret(secret.as_bytes()),
+        )
+        .unwrap();
 
         // build_validation() expects aud = "isupercoder-api"
-        let result = decode::<Claims>(&token, &DecodingKey::from_secret(secret.as_bytes()), &build_validation());
+        let result = decode::<Claims>(
+            &token,
+            &DecodingKey::from_secret(secret.as_bytes()),
+            &build_validation(),
+        );
         assert!(result.is_err());
     }
 }

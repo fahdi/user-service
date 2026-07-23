@@ -7,15 +7,15 @@ pub mod traits;
 pub mod utils;
 
 use actix_web::{HttpResponse, Result};
-use serde::Serialize;
-use mongodb::{Client, options::ClientOptions, Database};
 use deadpool_redis::{Config as RedisConfig, Pool as RedisPool, Runtime};
+use lazy_static::lazy_static;
 use lru::LruCache;
+use mongodb::{options::ClientOptions, Client, Database};
+use serde::Serialize;
 use std::env;
+use std::num::NonZeroUsize;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use lazy_static::lazy_static;
-use std::num::NonZeroUsize;
 
 // Global optimized pools and caches (following auth-service patterns)
 lazy_static! {
@@ -27,8 +27,7 @@ lazy_static! {
 
 // Initialize Redis connection pool (identical to auth-service)
 pub async fn init_redis_pool() -> std::result::Result<RedisPool, Box<dyn std::error::Error>> {
-    let redis_url = env::var("REDIS_URL")
-        .unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
+    let redis_url = env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
 
     let cfg = RedisConfig::from_url(redis_url);
     let pool = cfg.create_pool(Some(Runtime::Tokio1))?;
@@ -43,8 +42,9 @@ pub async fn init_redis_pool() -> std::result::Result<RedisPool, Box<dyn std::er
 
 // Initialize MongoDB connection pool (identical to auth-service pattern)
 pub async fn init_mongodb_client() -> std::result::Result<Client, mongodb::error::Error> {
-    let uri = env::var("MONGODB_URI")
-        .expect("MONGODB_URI environment variable must be set — refusing to use hardcoded credentials");
+    let uri = env::var("MONGODB_URI").expect(
+        "MONGODB_URI environment variable must be set — refusing to use hardcoded credentials",
+    );
 
     let mut client_options = ClientOptions::parse(&uri).await?;
 

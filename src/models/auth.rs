@@ -32,16 +32,28 @@ mod tests {
     fn test_claims_serialization_renames_user_id() {
         let claims = sample_claims();
         let json = serde_json::to_string(&claims).unwrap();
-        assert!(json.contains("\"userId\""), "user_id should serialize as userId");
-        assert!(!json.contains("\"user_id\""), "user_id in snake_case should not appear");
+        assert!(
+            json.contains("\"userId\""),
+            "user_id should serialize as userId"
+        );
+        assert!(
+            !json.contains("\"user_id\""),
+            "user_id in snake_case should not appear"
+        );
     }
 
     #[test]
     fn test_claims_serialization_renames_type() {
         let claims = sample_claims();
         let json = serde_json::to_string(&claims).unwrap();
-        assert!(json.contains("\"type\""), "role_type should serialize as type");
-        assert!(!json.contains("\"role_type\""), "role_type in snake_case should not appear");
+        assert!(
+            json.contains("\"type\""),
+            "role_type should serialize as type"
+        );
+        assert!(
+            !json.contains("\"role_type\""),
+            "role_type in snake_case should not appear"
+        );
     }
 
     #[test]

@@ -1,27 +1,30 @@
-use redis::AsyncCommands;
-use std::time::{SystemTime, UNIX_EPOCH};
-use lru::LruCache;
-use std::sync::{Arc, Mutex};
-use std::num::NonZeroUsize;
 use lazy_static::lazy_static;
+use lru::LruCache;
+use redis::AsyncCommands;
+use std::num::NonZeroUsize;
+use std::sync::{Arc, Mutex};
+use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::models::user::{StandardizedUser, CachedUserProfile, SettingsResponse};
+use crate::models::user::{CachedUserProfile, SettingsResponse, StandardizedUser};
 
 // Global LRU caches for optimal performance (Phase 4 optimization)
 lazy_static! {
-    static ref PROFILE_CACHE: Arc<Mutex<LruCache<String, CachedUserProfile>>> = 
+    static ref PROFILE_CACHE: Arc<Mutex<LruCache<String, CachedUserProfile>>> =
         Arc::new(Mutex::new(LruCache::new(NonZeroUsize::new(500).unwrap())));
-    static ref SETTINGS_CACHE: Arc<Mutex<LruCache<String, SettingsResponse>>> = 
+    static ref SETTINGS_CACHE: Arc<Mutex<LruCache<String, SettingsResponse>>> =
         Arc::new(Mutex::new(LruCache::new(NonZeroUsize::new(300).unwrap())));
 }
 
 // Get Redis connection (defined in main.rs)
-async fn get_redis_connection() -> Result<deadpool_redis::Connection, Box<dyn std::error::Error + Send + Sync>> {
+async fn get_redis_connection(
+) -> Result<deadpool_redis::Connection, Box<dyn std::error::Error + Send + Sync>> {
     use crate::REDIS_POOL;
 
     // Clone the pool outside the lock scope to avoid holding MutexGuard across await
     let pool = {
-        let pool_guard = REDIS_POOL.lock().map_err(|e| format!("Lock poisoned: {}", e))?;
+        let pool_guard = REDIS_POOL
+            .lock()
+            .map_err(|e| format!("Lock poisoned: {}", e))?;
         pool_guard.as_ref().cloned()
     };
 
@@ -36,7 +39,10 @@ pub async fn get_cached_profile(cache_key: &str) -> Option<StandardizedUser> {
     // First check in-memory LRU cache
     if let Ok(mut cache) = PROFILE_CACHE.lock() {
         if let Some(cached_profile) = cache.get(cache_key) {
-            let current_time = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+            let current_time = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_secs();
             if current_time - cached_profile.cached_at < cached_profile.ttl {
                 // Convert cached profile to StandardizedUser (using actual stored values)
                 return Some(StandardizedUser {
@@ -64,18 +70,21 @@ pub async fn get_cached_profile(cache_key: &str) -> Option<StandardizedUser> {
             }
         }
     }
-    
+
     // Then check Redis with pooled connection
     if let Ok(mut conn) = get_redis_connection().await {
         if let Ok(cached_data) = conn.get::<_, String>(cache_key).await {
             if let Ok(cached_profile) = serde_json::from_str::<CachedUserProfile>(&cached_data) {
-                let current_time = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+                let current_time = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs();
                 if current_time - cached_profile.cached_at < cached_profile.ttl {
                     // Store in LRU for even faster access next time
                     if let Ok(mut cache) = PROFILE_CACHE.lock() {
                         cache.put(cache_key.to_string(), cached_profile.clone());
                     }
-                    
+
                     // Convert to StandardizedUser (using actual stored values)
                     return Some(StandardizedUser {
                         _id: cached_profile.id.clone(),
@@ -100,12 +109,16 @@ pub async fn get_cached_profile(cache_key: &str) -> Option<StandardizedUser> {
             }
         }
     }
-    
+
     None
 }
 
 // Cache user profile in Redis and LRU (Phase 4 multi-layer caching)
-pub async fn cache_profile(cache_key: &str, user: &StandardizedUser, ttl: u64) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+pub async fn cache_profile(
+    cache_key: &str,
+    user: &StandardizedUser,
+    ttl: u64,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let cached_profile = CachedUserProfile {
         id: user.id.clone(),
         email: user.email.clone(),
@@ -126,33 +139,35 @@ pub async fn cache_profile(cache_key: &str, user: &StandardizedUser, ttl: u64) -
         cached_at: SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs(),
         ttl,
     };
-    
+
     // Cache in Redis
     if let Ok(mut conn) = get_redis_connection().await {
         let serialized = serde_json::to_string(&cached_profile)?;
         let _: () = conn.set_ex(cache_key, serialized, ttl).await?;
     }
-    
+
     // Cache in LRU for fastest access
     if let Ok(mut cache) = PROFILE_CACHE.lock() {
         cache.put(cache_key.to_string(), cached_profile);
     }
-    
+
     Ok(())
 }
 
 // Invalidate user profile cache
-pub async fn invalidate_profile_cache(cache_key: &str) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+pub async fn invalidate_profile_cache(
+    cache_key: &str,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Remove from Redis
     if let Ok(mut conn) = get_redis_connection().await {
         let _: Result<i32, redis::RedisError> = conn.del(cache_key).await;
     }
-    
+
     // Remove from LRU cache
     if let Ok(mut cache) = PROFILE_CACHE.lock() {
         cache.pop(cache_key);
     }
-    
+
     Ok(())
 }
 
@@ -164,7 +179,7 @@ pub async fn get_cached_settings(cache_key: &str) -> Option<SettingsResponse> {
             return Some(cached_settings.clone());
         }
     }
-    
+
     // Then check Redis with pooled connection
     if let Ok(mut conn) = get_redis_connection().await {
         if let Ok(cached_data) = conn.get::<_, String>(cache_key).await {
@@ -177,37 +192,43 @@ pub async fn get_cached_settings(cache_key: &str) -> Option<SettingsResponse> {
             }
         }
     }
-    
+
     None
 }
 
 // Cache user settings in Redis and LRU (Phase 4 multi-layer caching)
-pub async fn cache_settings(cache_key: &str, settings: &SettingsResponse, ttl: u64) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+pub async fn cache_settings(
+    cache_key: &str,
+    settings: &SettingsResponse,
+    ttl: u64,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Cache in Redis
     if let Ok(mut conn) = get_redis_connection().await {
         let serialized = serde_json::to_string(settings)?;
         let _: () = conn.set_ex(cache_key, serialized, ttl).await?;
     }
-    
+
     // Cache in LRU for fastest access
     if let Ok(mut cache) = SETTINGS_CACHE.lock() {
         cache.put(cache_key.to_string(), settings.clone());
     }
-    
+
     Ok(())
 }
 
 // Invalidate user settings cache
-pub async fn invalidate_settings_cache(cache_key: &str) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+pub async fn invalidate_settings_cache(
+    cache_key: &str,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Remove from Redis
     if let Ok(mut conn) = get_redis_connection().await {
         let _: Result<i32, redis::RedisError> = conn.del(cache_key).await;
     }
-    
+
     // Remove from LRU cache
     if let Ok(mut cache) = SETTINGS_CACHE.lock() {
         cache.pop(cache_key);
     }
-    
+
     Ok(())
 }

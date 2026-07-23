@@ -3,7 +3,8 @@ use rand::Rng;
 /// Generate a cryptographically random password of 32 characters.
 /// Uses alphanumeric + special characters for high entropy.
 pub fn generate_secure_password() -> String {
-    const CHARSET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*()-_=+";
+    const CHARSET: &[u8] =
+        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*()-_=+";
     let mut rng = rand::thread_rng();
     (0..32)
         .map(|_| {
@@ -59,23 +60,35 @@ mod tests {
     fn test_password_contains_uppercase() {
         // Generate several passwords; at least one should contain uppercase
         let has_upper = (0..20).any(|_| {
-            generate_secure_password().chars().any(|c| c.is_ascii_uppercase())
+            generate_secure_password()
+                .chars()
+                .any(|c| c.is_ascii_uppercase())
         });
-        assert!(has_upper, "Generated passwords should contain uppercase letters");
+        assert!(
+            has_upper,
+            "Generated passwords should contain uppercase letters"
+        );
     }
 
     #[test]
     fn test_password_contains_lowercase() {
         let has_lower = (0..20).any(|_| {
-            generate_secure_password().chars().any(|c| c.is_ascii_lowercase())
+            generate_secure_password()
+                .chars()
+                .any(|c| c.is_ascii_lowercase())
         });
-        assert!(has_lower, "Generated passwords should contain lowercase letters");
+        assert!(
+            has_lower,
+            "Generated passwords should contain lowercase letters"
+        );
     }
 
     #[test]
     fn test_password_contains_digits() {
         let has_digit = (0..20).any(|_| {
-            generate_secure_password().chars().any(|c| c.is_ascii_digit())
+            generate_secure_password()
+                .chars()
+                .any(|c| c.is_ascii_digit())
         });
         assert!(has_digit, "Generated passwords should contain digits");
     }
@@ -84,24 +97,38 @@ mod tests {
     fn test_password_contains_special_chars() {
         let specials: &str = "!@#$%^&*()-_=+";
         let has_special = (0..20).any(|_| {
-            generate_secure_password().chars().any(|c| specials.contains(c))
+            generate_secure_password()
+                .chars()
+                .any(|c| specials.contains(c))
         });
-        assert!(has_special, "Generated passwords should contain special characters");
+        assert!(
+            has_special,
+            "Generated passwords should contain special characters"
+        );
     }
 
     #[test]
     fn test_password_uniqueness_batch() {
         let passwords: HashSet<String> = (0..50).map(|_| generate_secure_password()).collect();
-        assert_eq!(passwords.len(), 50, "50 generated passwords should all be unique");
+        assert_eq!(
+            passwords.len(),
+            50,
+            "50 generated passwords should all be unique"
+        );
     }
 
     #[test]
     fn test_password_uses_only_charset_chars() {
-        let charset = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*()-_=+";
+        let charset =
+            "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*()-_=+";
         for _ in 0..10 {
             let pw = generate_secure_password();
             for ch in pw.chars() {
-                assert!(charset.contains(ch), "Character '{}' not in allowed charset", ch);
+                assert!(
+                    charset.contains(ch),
+                    "Character '{}' not in allowed charset",
+                    ch
+                );
             }
         }
     }
@@ -184,7 +211,10 @@ mod tests {
         // This documents the current behavior: the validator only checks basic structure.
         let result = validate_email("a@b@c.com");
         // "b@c.com" has a dot and doesn't start/end with dot, so it passes
-        assert!(result, "Current validator accepts multiple @ (known limitation)");
+        assert!(
+            result,
+            "Current validator accepts multiple @ (known limitation)"
+        );
     }
 
     #[test]
@@ -279,6 +309,9 @@ mod tests {
         // Each metacharacter should be escaped with a backslash
         // The escaped output should be safe for use in a regex pattern
         let re = regex::Regex::new(&escaped).expect("Escaped string should be valid regex");
-        assert!(re.is_match(input), "Escaped regex should match the original literal string");
+        assert!(
+            re.is_match(input),
+            "Escaped regex should match the original literal string"
+        );
     }
 }

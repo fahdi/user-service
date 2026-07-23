@@ -17,16 +17,20 @@ mod user_profile_tests {
         // Expected: 401 Unauthorized when no JWT token provided
 
         let app = test::init_service(
-            App::new()
-                .route("/api/users/profile", web::get().to(mock_get_profile))
-        ).await;
+            App::new().route("/api/users/profile", web::get().to(mock_get_profile)),
+        )
+        .await;
 
         let req = test::TestRequest::get()
             .uri("/api/users/profile")
             .to_request();
 
         let resp = test::call_service(&app, req).await;
-        assert_eq!(resp.status().as_u16(), 401, "Should return 401 without auth token");
+        assert_eq!(
+            resp.status().as_u16(),
+            401,
+            "Should return 401 without auth token"
+        );
     }
 
     #[actix_web::test]
@@ -35,9 +39,9 @@ mod user_profile_tests {
         // Expected: 200 OK with user profile data
 
         let app = test::init_service(
-            App::new()
-                .route("/api/users/profile", web::get().to(mock_get_profile))
-        ).await;
+            App::new().route("/api/users/profile", web::get().to(mock_get_profile)),
+        )
+        .await;
 
         let req = test::TestRequest::get()
             .uri("/api/users/profile")
@@ -45,7 +49,10 @@ mod user_profile_tests {
             .to_request();
 
         let resp = test::call_service(&app, req).await;
-        assert!(resp.status().is_success(), "Should return 200 OK with valid token");
+        assert!(
+            resp.status().is_success(),
+            "Should return 200 OK with valid token"
+        );
 
         let body: serde_json::Value = test::read_body_json(resp).await;
         assert_eq!(body["success"], true);
@@ -63,7 +70,9 @@ mod user_profile_tests {
     }
 
     // Mock handler for initial TDD (will be replaced with actual implementation)
-    async fn mock_get_profile(req: actix_web::HttpRequest) -> actix_web::Result<actix_web::HttpResponse> {
+    async fn mock_get_profile(
+        req: actix_web::HttpRequest,
+    ) -> actix_web::Result<actix_web::HttpResponse> {
         // Check for authorization header
         if req.headers().get("authorization").is_none() {
             return Ok(actix_web::HttpResponse::Unauthorized().json(json!({
@@ -92,10 +101,9 @@ mod user_roles_tests {
     async fn test_get_user_roles_requires_authentication() {
         // TDD Step 1: Test authentication requirement for roles endpoint
 
-        let app = test::init_service(
-            App::new()
-                .route("/api/users/roles", web::get().to(mock_get_roles))
-        ).await;
+        let app =
+            test::init_service(App::new().route("/api/users/roles", web::get().to(mock_get_roles)))
+                .await;
 
         let req = test::TestRequest::get()
             .uri("/api/users/roles")
@@ -110,10 +118,9 @@ mod user_roles_tests {
         // TDD Step 1: Test roles enumeration
         // Expected: List of available roles with permissions
 
-        let app = test::init_service(
-            App::new()
-                .route("/api/users/roles", web::get().to(mock_get_roles))
-        ).await;
+        let app =
+            test::init_service(App::new().route("/api/users/roles", web::get().to(mock_get_roles)))
+                .await;
 
         let req = test::TestRequest::get()
             .uri("/api/users/roles")
@@ -126,7 +133,10 @@ mod user_roles_tests {
         let body: serde_json::Value = test::read_body_json(resp).await;
         assert_eq!(body["success"], true);
         assert!(body["roles"].is_array());
-        assert!(body["roles"].as_array().unwrap().len() >= 4, "Should have at least 4 roles");
+        assert!(
+            body["roles"].as_array().unwrap().len() >= 4,
+            "Should have at least 4 roles"
+        );
     }
 
     #[actix_web::test]
@@ -134,9 +144,9 @@ mod user_roles_tests {
         // TDD Step 1: Test admin-only access for role updates
 
         let app = test::init_service(
-            App::new()
-                .route("/api/users/roles", web::put().to(mock_update_role))
-        ).await;
+            App::new().route("/api/users/roles", web::put().to(mock_update_role)),
+        )
+        .await;
 
         let req = test::TestRequest::put()
             .uri("/api/users/roles")
@@ -153,9 +163,9 @@ mod user_roles_tests {
         // TDD Step 1: Test role validation
 
         let app = test::init_service(
-            App::new()
-                .route("/api/users/roles", web::put().to(mock_update_role))
-        ).await;
+            App::new().route("/api/users/roles", web::put().to(mock_update_role)),
+        )
+        .await;
 
         let req = test::TestRequest::put()
             .uri("/api/users/roles")
@@ -164,11 +174,17 @@ mod user_roles_tests {
             .to_request();
 
         let resp = test::call_service(&app, req).await;
-        assert_eq!(resp.status().as_u16(), 400, "Invalid role should return 400");
+        assert_eq!(
+            resp.status().as_u16(),
+            400,
+            "Invalid role should return 400"
+        );
     }
 
     // Mock handlers
-    async fn mock_get_roles(req: actix_web::HttpRequest) -> actix_web::Result<actix_web::HttpResponse> {
+    async fn mock_get_roles(
+        req: actix_web::HttpRequest,
+    ) -> actix_web::Result<actix_web::HttpResponse> {
         if req.headers().get("authorization").is_none() {
             return Ok(actix_web::HttpResponse::Unauthorized().json(json!({
                 "success": false,
@@ -204,7 +220,10 @@ mod user_roles_tests {
         })))
     }
 
-    async fn mock_update_role(req: actix_web::HttpRequest, body: web::Json<serde_json::Value>) -> actix_web::Result<actix_web::HttpResponse> {
+    async fn mock_update_role(
+        req: actix_web::HttpRequest,
+        body: web::Json<serde_json::Value>,
+    ) -> actix_web::Result<actix_web::HttpResponse> {
         let auth_header = req.headers().get("authorization");
 
         if auth_header.is_none() {
@@ -248,9 +267,9 @@ mod user_activity_tests {
         // TDD Step 1: Test authentication requirement
 
         let app = test::init_service(
-            App::new()
-                .route("/api/users/activity", web::get().to(mock_get_activity))
-        ).await;
+            App::new().route("/api/users/activity", web::get().to(mock_get_activity)),
+        )
+        .await;
 
         let req = test::TestRequest::get()
             .uri("/api/users/activity")
@@ -265,9 +284,9 @@ mod user_activity_tests {
         // TDD Step 1: Test pagination
 
         let app = test::init_service(
-            App::new()
-                .route("/api/users/activity", web::get().to(mock_get_activity))
-        ).await;
+            App::new().route("/api/users/activity", web::get().to(mock_get_activity)),
+        )
+        .await;
 
         let req = test::TestRequest::get()
             .uri("/api/users/activity?page=1&limit=10")
@@ -288,9 +307,9 @@ mod user_activity_tests {
         // TDD Step 1: Test filtering by action type
 
         let app = test::init_service(
-            App::new()
-                .route("/api/users/activity", web::get().to(mock_get_activity))
-        ).await;
+            App::new().route("/api/users/activity", web::get().to(mock_get_activity)),
+        )
+        .await;
 
         let req = test::TestRequest::get()
             .uri("/api/users/activity?action=login")
@@ -312,9 +331,9 @@ mod user_activity_tests {
         // TDD Step 1: Test date range filtering
 
         let app = test::init_service(
-            App::new()
-                .route("/api/users/activity", web::get().to(mock_get_activity))
-        ).await;
+            App::new().route("/api/users/activity", web::get().to(mock_get_activity)),
+        )
+        .await;
 
         let req = test::TestRequest::get()
             .uri("/api/users/activity?start_date=2025-01-01&end_date=2025-12-31")
@@ -326,7 +345,9 @@ mod user_activity_tests {
     }
 
     // Mock handler
-    async fn mock_get_activity(req: actix_web::HttpRequest) -> actix_web::Result<actix_web::HttpResponse> {
+    async fn mock_get_activity(
+        req: actix_web::HttpRequest,
+    ) -> actix_web::Result<actix_web::HttpResponse> {
         if req.headers().get("authorization").is_none() {
             return Ok(actix_web::HttpResponse::Unauthorized().json(json!({
                 "success": false,
@@ -339,14 +360,12 @@ mod user_activity_tests {
         let filter_login = query_str.contains("action=login");
 
         let activities = if filter_login {
-            vec![
-                json!({
-                    "id": "act_1",
-                    "user_id": "user_123",
-                    "action": "login",
-                    "timestamp": "2025-10-07T12:00:00Z"
-                })
-            ]
+            vec![json!({
+                "id": "act_1",
+                "user_id": "user_123",
+                "action": "login",
+                "timestamp": "2025-10-07T12:00:00Z"
+            })]
         } else {
             vec![
                 json!({
@@ -360,7 +379,7 @@ mod user_activity_tests {
                     "user_id": "user_123",
                     "action": "profile_update",
                     "timestamp": "2025-10-07T13:00:00Z"
-                })
+                }),
             ]
         };
 
@@ -388,9 +407,9 @@ mod data_export_import_tests {
         // TDD Step 1: Test authentication requirement
 
         let app = test::init_service(
-            App::new()
-                .route("/api/users/export", web::get().to(mock_export_data))
-        ).await;
+            App::new().route("/api/users/export", web::get().to(mock_export_data)),
+        )
+        .await;
 
         let req = test::TestRequest::get()
             .uri("/api/users/export")
@@ -405,9 +424,9 @@ mod data_export_import_tests {
         // TDD Step 1: Test complete data export
 
         let app = test::init_service(
-            App::new()
-                .route("/api/users/export", web::get().to(mock_export_data))
-        ).await;
+            App::new().route("/api/users/export", web::get().to(mock_export_data)),
+        )
+        .await;
 
         let req = test::TestRequest::get()
             .uri("/api/users/export")
@@ -430,9 +449,9 @@ mod data_export_import_tests {
         // TDD Step 1: Test admin-only access for import
 
         let app = test::init_service(
-            App::new()
-                .route("/api/users/import", web::post().to(mock_import_data))
-        ).await;
+            App::new().route("/api/users/import", web::post().to(mock_import_data)),
+        )
+        .await;
 
         let req = test::TestRequest::post()
             .uri("/api/users/import")
@@ -454,9 +473,9 @@ mod data_export_import_tests {
         // TDD Step 1: Test email validation
 
         let app = test::init_service(
-            App::new()
-                .route("/api/users/import", web::post().to(mock_import_data))
-        ).await;
+            App::new().route("/api/users/import", web::post().to(mock_import_data)),
+        )
+        .await;
 
         let req = test::TestRequest::post()
             .uri("/api/users/import")
@@ -478,9 +497,9 @@ mod data_export_import_tests {
         // TDD Step 1: Test successful import
 
         let app = test::init_service(
-            App::new()
-                .route("/api/users/import", web::post().to(mock_import_data))
-        ).await;
+            App::new().route("/api/users/import", web::post().to(mock_import_data)),
+        )
+        .await;
 
         let req = test::TestRequest::post()
             .uri("/api/users/import")
@@ -503,7 +522,9 @@ mod data_export_import_tests {
     }
 
     // Mock handlers
-    async fn mock_export_data(req: actix_web::HttpRequest) -> actix_web::Result<actix_web::HttpResponse> {
+    async fn mock_export_data(
+        req: actix_web::HttpRequest,
+    ) -> actix_web::Result<actix_web::HttpResponse> {
         if req.headers().get("authorization").is_none() {
             return Ok(actix_web::HttpResponse::Unauthorized().json(json!({
                 "success": false,
@@ -529,7 +550,10 @@ mod data_export_import_tests {
         })))
     }
 
-    async fn mock_import_data(req: actix_web::HttpRequest, body: web::Json<serde_json::Value>) -> actix_web::Result<actix_web::HttpResponse> {
+    async fn mock_import_data(
+        req: actix_web::HttpRequest,
+        body: web::Json<serde_json::Value>,
+    ) -> actix_web::Result<actix_web::HttpResponse> {
         let auth_header = req.headers().get("authorization");
 
         if auth_header.is_none() {
@@ -577,9 +601,9 @@ mod performance_tests {
         // This test ensures we achieve 500x+ improvement over Node.js
 
         let app = test::init_service(
-            App::new()
-                .route("/api/users/profile", web::get().to(mock_fast_profile))
-        ).await;
+            App::new().route("/api/users/profile", web::get().to(mock_fast_profile)),
+        )
+        .await;
 
         let start = Instant::now();
 
@@ -598,7 +622,9 @@ mod performance_tests {
         // Note: Actual performance will be measured against MongoDB in production
     }
 
-    async fn mock_fast_profile(_req: actix_web::HttpRequest) -> actix_web::Result<actix_web::HttpResponse> {
+    async fn mock_fast_profile(
+        _req: actix_web::HttpRequest,
+    ) -> actix_web::Result<actix_web::HttpResponse> {
         Ok(actix_web::HttpResponse::Ok().json(json!({
             "success": true,
             "user": {
@@ -616,14 +642,18 @@ mod performance_tests {
 
 #[cfg(test)]
 mod security_audit_tests {
-    use user_service::utils::security::{generate_secure_password, validate_email, escape_regex};
+    use user_service::utils::security::{escape_regex, generate_secure_password, validate_email};
 
     // ---- Issue #1: Hardcoded password removed from response ----
 
     #[test]
     fn test_generate_secure_password_length() {
         let pw = generate_secure_password();
-        assert!(pw.len() >= 24, "Generated password must be at least 24 chars, got {}", pw.len());
+        assert!(
+            pw.len() >= 24,
+            "Generated password must be at least 24 chars, got {}",
+            pw.len()
+        );
     }
 
     #[test]
@@ -636,7 +666,10 @@ mod security_audit_tests {
     #[test]
     fn test_generate_secure_password_not_hardcoded() {
         let pw = generate_secure_password();
-        assert_ne!(pw, "ChangeMe123!", "Password must not be the old hardcoded value");
+        assert_ne!(
+            pw, "ChangeMe123!",
+            "Password must not be the old hardcoded value"
+        );
     }
 
     // ---- Issue #2: JWT secret required ----
@@ -676,7 +709,10 @@ mod security_audit_tests {
 
     #[test]
     fn test_validate_email_rejects_no_at() {
-        assert!(!validate_email("invalid_email"), "Should reject string without @");
+        assert!(
+            !validate_email("invalid_email"),
+            "Should reject string without @"
+        );
     }
 
     #[test]
@@ -691,7 +727,10 @@ mod security_audit_tests {
 
     #[test]
     fn test_validate_email_rejects_no_local() {
-        assert!(!validate_email("@domain.com"), "Should reject missing local part");
+        assert!(
+            !validate_email("@domain.com"),
+            "Should reject missing local part"
+        );
     }
 
     #[test]
@@ -701,12 +740,18 @@ mod security_audit_tests {
 
     #[test]
     fn test_validate_email_accepts_valid() {
-        assert!(validate_email("user@example.com"), "Should accept valid email");
+        assert!(
+            validate_email("user@example.com"),
+            "Should accept valid email"
+        );
     }
 
     #[test]
     fn test_validate_email_accepts_plus_addressing() {
-        assert!(validate_email("user+tag@example.com"), "Should accept plus addressing");
+        assert!(
+            validate_email("user+tag@example.com"),
+            "Should accept plus addressing"
+        );
     }
 
     // ---- Issue #7: bcrypt hash error handling ----
@@ -716,6 +761,9 @@ mod security_audit_tests {
         // Verify that bcrypt::hash with a normal password and cost 12 succeeds.
         // The code should use `?` / match instead of .unwrap().
         let result = bcrypt::hash("TestPassword1!", 12);
-        assert!(result.is_ok(), "bcrypt hash should succeed for normal input");
+        assert!(
+            result.is_ok(),
+            "bcrypt hash should succeed for normal input"
+        );
     }
 }

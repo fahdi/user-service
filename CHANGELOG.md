@@ -1,5 +1,13 @@
 ## 2026-05-31 - Track Cargo.lock for reproducible Docker builds (#138)
 
+## 2026-07-24 - Index-conflict classification fix (#16)
+
+### Fixed
+- Startup index creation classified benign conflicts by matching "already exists", missing modern MongoDB code 85/86 errors worded "same name" - benign conflicts were warn-logged as failures. Spec-first fix: failing tests written for a `utils::is_index_conflict` classifier (both wordings, both codes, real-failure rejection), then implemented and wired into `main.rs`. Fourth service with this exact copy-pasted bug (after auth-service, file-management, projects-api).
+- Removed an unused `futures_util::TryStreamExt` import that failed `clippy --all-targets -D warnings` in the integration test build.
+- Repo-wide `cargo fmt` (the tree was not fmt-clean; CI gates fmt).
+
+
 ### Fixed
 - `Cargo.lock` is now tracked in git (removed from `.gitignore`). Production Docker build was failing with `failed to compute cache key: "/Cargo.lock": not found` because the Dockerfile copies `Cargo.toml Cargo.lock ./` but the lock file was gitignored. For a binary crate, Cargo.lock should always be checked in to guarantee reproducible deployments.
 

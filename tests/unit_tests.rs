@@ -213,10 +213,13 @@ mod rate_limit_logic_tests {
                 entry.window_start = current_time;
             }
         } else {
-            cache.put(key.to_string(), RateLimitEntry {
-                count: 1,
-                window_start: current_time,
-            });
+            cache.put(
+                key.to_string(),
+                RateLimitEntry {
+                    count: 1,
+                    window_start: current_time,
+                },
+            );
         }
 
         true
@@ -241,7 +244,11 @@ mod rate_limit_logic_tests {
         let mut cache = LruCache::new(NonZeroUsize::new(100).unwrap());
         let config = default_config();
         for i in 0..5 {
-            assert!(check_rate_limit(&mut cache, "client:1", &config, 1000 + i), "Request {} should be allowed", i);
+            assert!(
+                check_rate_limit(&mut cache, "client:1", &config, 1000 + i),
+                "Request {} should be allowed",
+                i
+            );
         }
     }
 
@@ -249,7 +256,7 @@ mod rate_limit_logic_tests {
     fn test_exceeding_limit_blocked() {
         let mut cache = LruCache::new(NonZeroUsize::new(100).unwrap());
         let config = default_config(); // 5 requests per window
-        // First 5 should pass
+                                       // First 5 should pass
         for _ in 0..5 {
             check_rate_limit(&mut cache, "client:1", &config, 1000);
         }
@@ -261,7 +268,7 @@ mod rate_limit_logic_tests {
     fn test_window_reset() {
         let mut cache = LruCache::new(NonZeroUsize::new(100).unwrap());
         let config = default_config(); // 60 second window
-        // Exhaust limit
+                                       // Exhaust limit
         for _ in 0..5 {
             check_rate_limit(&mut cache, "client:1", &config, 1000);
         }
@@ -296,7 +303,10 @@ mod rate_limit_logic_tests {
         check_rate_limit(&mut cache, "client:3", &config, 1000);
 
         // client:1 should have been evicted, so it starts fresh
-        assert!(cache.get("client:1").is_none(), "client:1 should be evicted");
+        assert!(
+            cache.get("client:1").is_none(),
+            "client:1 should be evicted"
+        );
         assert!(cache.get("client:3").is_some(), "client:3 should exist");
     }
 
@@ -355,7 +365,10 @@ mod password_validation_tests {
         let password = "SamePassword123!";
         let hash1 = bcrypt::hash(password, 12).unwrap();
         let hash2 = bcrypt::hash(password, 12).unwrap();
-        assert_ne!(hash1, hash2, "bcrypt should produce different hashes due to random salt");
+        assert_ne!(
+            hash1, hash2,
+            "bcrypt should produce different hashes due to random salt"
+        );
         // But both should verify
         assert!(bcrypt::verify(password, &hash1).unwrap());
         assert!(bcrypt::verify(password, &hash2).unwrap());
@@ -364,7 +377,7 @@ mod password_validation_tests {
 
 #[cfg(test)]
 mod json_serialization_tests {
-    use user_service::utils::security::{generate_secure_password, validate_email, escape_regex};
+    use user_service::utils::security::{escape_regex, generate_secure_password, validate_email};
 
     #[test]
     fn test_optimize_json_consistent_output() {
@@ -527,7 +540,10 @@ mod profile_picture_url_validation_tests {
     #[test]
     fn test_google_drive_thumbnail_url_format() {
         let file_id = "1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgVE2upms";
-        let url = format!("https://drive.google.com/thumbnail?id={}&sz=w200-h200", file_id);
+        let url = format!(
+            "https://drive.google.com/thumbnail?id={}&sz=w200-h200",
+            file_id
+        );
         assert!(url.starts_with("https://drive.google.com/thumbnail"));
         assert!(url.contains(file_id));
         assert!(url.contains("sz=w200-h200"));
@@ -536,7 +552,10 @@ mod profile_picture_url_validation_tests {
     #[test]
     fn test_profile_picture_url_is_https() {
         let url = "https://drive.google.com/thumbnail?id=abc&sz=w200-h200";
-        assert!(url.starts_with("https://"), "Profile picture URLs must use HTTPS");
+        assert!(
+            url.starts_with("https://"),
+            "Profile picture URLs must use HTTPS"
+        );
     }
 
     #[test]
@@ -561,7 +580,14 @@ mod profile_picture_url_validation_tests {
 mod role_permissions_tests {
     #[test]
     fn test_admin_role_permissions() {
-        let admin_perms: &[&str] = &["read", "write", "delete", "manage_users", "manage_settings", "admin"];
+        let admin_perms: &[&str] = &[
+            "read",
+            "write",
+            "delete",
+            "manage_users",
+            "manage_settings",
+            "admin",
+        ];
         assert!(admin_perms.contains(&"admin"));
         assert!(admin_perms.contains(&"manage_users"));
     }
@@ -635,4 +661,31 @@ mod sort_order_validation_tests {
         assert_eq!(sort, "createdAt");
         assert_eq!(order, "desc");
     }
+}
+
+// ── index-conflict classification (spec-first) ─────────────────────────
+// MongoDB reports benign index conflicts as code 85 ("already exists with
+// different options") OR code 86 ("same name as the requested index").
+// Startup index creation must classify BOTH as benign, not warn-log them.
+
+#[test]
+fn index_conflict_classifier_recognizes_all_mongodb_wordings() {
+    use user_service::utils::is_index_conflict;
+
+    assert!(is_index_conflict("Index with name: email_1 already exists"));
+    assert!(is_index_conflict(
+        "An existing index has the same name as the requested index"
+    ));
+    assert!(is_index_conflict("Error code 85 (IndexOptionsConflict)"));
+    assert!(is_index_conflict("Error code 86 (IndexKeySpecsConflict)"));
+}
+
+#[test]
+fn index_conflict_classifier_rejects_real_failures() {
+    use user_service::utils::is_index_conflict;
+
+    assert!(!is_index_conflict("network timeout"));
+    assert!(!is_index_conflict(
+        "Namespace users is a view, not a collection"
+    ));
 }
