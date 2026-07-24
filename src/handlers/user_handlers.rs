@@ -38,7 +38,7 @@ pub async fn get_profile(
     query: web::Query<serde_json::Value>,
 ) -> Result<HttpResponse> {
     // Extract JWT claims from request
-    let claims = match extract_claims_from_request(&req) {
+    let claims = match extract_claims_from_request(&req).await {
         Ok(claims) => claims,
         Err(_) => {
             return Ok(HttpResponse::Unauthorized().json(ErrorResponse {
@@ -171,7 +171,7 @@ pub async fn get_profile(
 // Get user settings endpoint (matches Node.js /api/users/settings GET exactly)
 pub async fn get_settings(req: HttpRequest) -> Result<HttpResponse> {
     // Extract JWT claims from request
-    let claims = match extract_claims_from_request(&req) {
+    let claims = match extract_claims_from_request(&req).await {
         Ok(claims) => claims,
         Err(_) => {
             return Ok(HttpResponse::Unauthorized().json(ErrorResponse {
@@ -293,7 +293,7 @@ pub async fn update_settings(
     }
 
     // Extract JWT claims from request
-    let claims = match extract_claims_from_request(&req) {
+    let claims = match extract_claims_from_request(&req).await {
         Ok(claims) => claims,
         Err(_) => {
             return Ok(HttpResponse::Unauthorized().json(ErrorResponse {
@@ -491,7 +491,7 @@ pub async fn update_profile_picture(
     mut payload: Multipart,
 ) -> Result<HttpResponse> {
     // Extract JWT claims from request
-    let claims = match extract_claims_from_request(&req) {
+    let claims = match extract_claims_from_request(&req).await {
         Ok(claims) => claims,
         Err(_) => {
             return Ok(HttpResponse::Unauthorized().json(ErrorResponse {
@@ -687,7 +687,7 @@ pub async fn change_password(
     }
 
     // Extract JWT claims from request
-    let claims = match extract_claims_from_request(&req) {
+    let claims = match extract_claims_from_request(&req).await {
         Ok(claims) => claims,
         Err(_) => {
             return Ok(HttpResponse::Unauthorized().json(ErrorResponse {
@@ -814,7 +814,7 @@ pub async fn change_password(
 // Delete profile picture endpoint (matches Node.js /api/users/avatar DELETE exactly)
 pub async fn delete_avatar(req: HttpRequest) -> Result<HttpResponse> {
     // Extract JWT claims from request
-    let claims = match extract_claims_from_request(&req) {
+    let claims = match extract_claims_from_request(&req).await {
         Ok(claims) => claims,
         Err(_) => {
             return Ok(HttpResponse::Unauthorized().json(ErrorResponse {
@@ -903,7 +903,7 @@ pub async fn admin_search_users(
     query: web::Query<UserSearchQuery>,
 ) -> Result<HttpResponse> {
     // Extract JWT claims from request
-    let claims = match extract_claims_from_request(&req) {
+    let claims = match extract_claims_from_request(&req).await {
         Ok(claims) => claims,
         Err(_) => {
             return Ok(HttpResponse::Unauthorized().json(ErrorResponse {
@@ -1007,7 +1007,7 @@ pub async fn admin_update_user(
     }
 
     // Extract JWT claims from request
-    let claims = match extract_claims_from_request(&req) {
+    let claims = match extract_claims_from_request(&req).await {
         Ok(claims) => claims,
         Err(_) => {
             return Ok(HttpResponse::Unauthorized().json(ErrorResponse {
@@ -1131,7 +1131,7 @@ pub async fn admin_update_user(
 // Get user roles and permissions (GET /api/users/roles)
 pub async fn get_user_roles(req: HttpRequest) -> Result<HttpResponse> {
     // Extract JWT claims from request
-    let claims = match extract_claims_from_request(&req) {
+    let claims = match extract_claims_from_request(&req).await {
         Ok(claims) => claims,
         Err(_) => {
             return Ok(HttpResponse::Unauthorized().json(ErrorResponse {
@@ -1171,7 +1171,7 @@ pub async fn update_user_role(
     }
 
     // Extract JWT claims from request
-    let claims = match extract_claims_from_request(&req) {
+    let claims = match extract_claims_from_request(&req).await {
         Ok(claims) => claims,
         Err(_) => {
             return Ok(HttpResponse::Unauthorized().json(ErrorResponse {
@@ -1261,7 +1261,7 @@ pub async fn get_user_activity(
     query: web::Query<ActivityQuery>,
 ) -> Result<HttpResponse> {
     // Extract JWT claims from request
-    let claims = match extract_claims_from_request(&req) {
+    let claims = match extract_claims_from_request(&req).await {
         Ok(claims) => claims,
         Err(_) => {
             return Ok(HttpResponse::Unauthorized().json(ErrorResponse {
@@ -1344,7 +1344,7 @@ pub async fn get_user_activity(
 // Export user data (GET /api/users/export)
 pub async fn export_user_data(req: HttpRequest) -> Result<HttpResponse> {
     // Extract JWT claims from request
-    let claims = match extract_claims_from_request(&req) {
+    let claims = match extract_claims_from_request(&req).await {
         Ok(claims) => claims,
         Err(_) => {
             return Ok(HttpResponse::Unauthorized().json(ErrorResponse {
@@ -1462,7 +1462,7 @@ pub async fn import_user_data(
     body: web::Json<DataImportRequest>,
 ) -> Result<HttpResponse> {
     // Extract JWT claims from request
-    let claims = match extract_claims_from_request(&req) {
+    let claims = match extract_claims_from_request(&req).await {
         Ok(claims) => claims,
         Err(_) => {
             return Ok(HttpResponse::Unauthorized().json(ErrorResponse {

@@ -689,3 +689,117 @@ fn index_conflict_classifier_rejects_real_failures() {
         "Namespace users is a view, not a collection"
     ));
 }
+
+// ── Spec (issue #18-class): middleware must honor the auth-service blacklist ─
+// Written before implementation: `validate_bearer_with` does not exist yet.
+
+mod blacklist_honoring_spec {
+    use jsonwebtoken::{encode, EncodingKey, Header};
+    use user_service::middleware::auth::validate_bearer_with;
+
+    #[derive(serde::Serialize)]
+    struct TestClaims {
+        #[serde(rename = "userId")]
+        user_id: String,
+        email: String,
+        name: String,
+        #[serde(rename = "type")]
+        role_type: String,
+        role: String,
+        iss: String,
+        aud: String,
+        exp: usize,
+    }
+
+    fn local_token(secret: &str) -> String {
+        encode(
+            &Header::default(),
+            &TestClaims {
+                user_id: "u-1".into(),
+                email: "a@b.c".into(),
+                name: "A".into(),
+                role_type: "customer".into(),
+                role: "customer".into(),
+                iss: "isupercoder-auth".into(),
+                aud: "isupercoder-api".into(),
+                exp: (chrono::Utc::now().timestamp() + 3600) as usize,
+            },
+            &EncodingKey::from_secret(secret.as_bytes()),
+        )
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn remote_rejection_is_final_despite_valid_local_signature() {
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .and(wiremock::matchers::path("/api/auth/validate"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "success": true, "valid": false, "claims": null, "error": "blacklisted"
+                })),
+            )
+            .mount(&server)
+            .await;
+
+        let token = local_token("s3cret");
+        assert!(
+            validate_bearer_with(&server.uri(), &token, "s3cret")
+                .await
+                .is_err(),
+            "a blacklisted token must not be resurrected by local validation"
+        );
+    }
+
+    #[tokio::test]
+    async fn remote_validation_success_maps_claims() {
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .and(wiremock::matchers::path("/api/auth/validate"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "success": true, "valid": true,
+                    "claims": {
+                        "userId": "remote-1", "email": "r@b.c", "name": "R",
+                        "role": "admin", "exp": 9999999999u64
+                    },
+                    "error": null
+                })),
+            )
+            .mount(&server)
+            .await;
+
+        let claims = validate_bearer_with(&server.uri(), "any-token", "s3cret")
+            .await
+            .expect("remote-validated token authenticates");
+        assert_eq!(claims.user_id, "remote-1");
+        assert_eq!(claims.role, "admin");
+    }
+
+    #[tokio::test]
+    async fn unavailable_auth_service_falls_back_to_local() {
+        let dead = "http://127.0.0.1:1";
+        let token = local_token("s3cret");
+        assert!(validate_bearer_with(dead, &token, "s3cret").await.is_ok());
+        assert!(validate_bearer_with(dead, "garbage", "s3cret")
+            .await
+            .is_err());
+    }
+
+    #[tokio::test]
+    async fn malformed_valid_without_claims_is_rejected() {
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .and(wiremock::matchers::path("/api/auth/validate"))
+            .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(
+                serde_json::json!({ "success": true, "valid": true, "claims": null }),
+            ))
+            .mount(&server)
+            .await;
+
+        let token = local_token("s3cret");
+        assert!(validate_bearer_with(&server.uri(), &token, "s3cret")
+            .await
+            .is_err());
+    }
+}
