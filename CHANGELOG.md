@@ -1,5 +1,12 @@
 ## 2026-05-31 - Track Cargo.lock for reproducible Docker builds (#138)
 
+## 2026-07-24 - Security: honor the auth-service blacklist (#18)
+
+### Fixed
+- **High**: `extract_claims_from_request` validated JWTs purely locally and never consulted the auth-service blacklist - revoked tokens kept authenticating on all protected routes until natural expiry (fourth instance of the class: app #234, projects-api #24, file-management #21). Spec-first: four specs written and confirmed RED (compile + behavior) before implementation - explicit remote rejection is final despite a valid local signature, remote validation maps claims, unavailability falls back to local validation (consistent cross-service availability trade-off), malformed valid-without-claims responses are rejected.
+- New pure core `validate_bearer_with(auth_url, token, secret)` (wiremock-testable, no env races); the env-reading wrapper stays thin. `AuthExtractor` DI trait is now async; `AUTH_SERVICE_URL` env (default `http://auth-service:8080`).
+
+
 ## 2026-07-24 - Index-conflict classification fix (#16)
 
 ### Fixed

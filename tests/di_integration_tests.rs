@@ -241,8 +241,12 @@ impl MockAuth {
     }
 }
 
+#[async_trait::async_trait(?Send)]
 impl AuthExtractor for MockAuth {
-    fn extract_claims(&self, req: &actix_web::HttpRequest) -> Result<Claims, actix_web::Error> {
+    async fn extract_claims(
+        &self,
+        req: &actix_web::HttpRequest,
+    ) -> Result<Claims, actix_web::Error> {
         let header = req
             .headers()
             .get("authorization")

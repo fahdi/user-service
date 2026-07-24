@@ -115,8 +115,12 @@ pub trait FileUploader: Send + Sync {
 use crate::models::auth::Claims;
 
 /// Abstracts JWT extraction from HTTP requests.
+#[async_trait::async_trait(?Send)]
 pub trait AuthExtractor: Send + Sync {
-    fn extract_claims(&self, req: &actix_web::HttpRequest) -> Result<Claims, actix_web::Error>;
+    async fn extract_claims(
+        &self,
+        req: &actix_web::HttpRequest,
+    ) -> Result<Claims, actix_web::Error>;
 }
 
 // ---------------------------------------------------------------------------

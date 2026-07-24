@@ -226,9 +226,13 @@ impl FileUploader for GoogleDriveUploader {
 /// Concrete implementation that delegates to the existing middleware/auth module.
 pub struct JwtAuthExtractor;
 
+#[async_trait::async_trait(?Send)]
 impl AuthExtractor for JwtAuthExtractor {
-    fn extract_claims(&self, req: &actix_web::HttpRequest) -> Result<Claims, actix_web::Error> {
-        crate::middleware::auth::extract_claims_from_request(req)
+    async fn extract_claims(
+        &self,
+        req: &actix_web::HttpRequest,
+    ) -> Result<Claims, actix_web::Error> {
+        crate::middleware::auth::extract_claims_from_request(req).await
     }
 }
 

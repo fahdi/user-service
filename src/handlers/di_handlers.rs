@@ -40,7 +40,7 @@ pub async fn get_profile(
     query: web::Query<serde_json::Value>,
     state: web::Data<AppState>,
 ) -> Result<HttpResponse> {
-    let claims = match state.auth.extract_claims(&req) {
+    let claims = match state.auth.extract_claims(&req).await {
         Ok(c) => c,
         Err(_) => {
             return Ok(HttpResponse::Unauthorized().json(ErrorResponse {
@@ -144,7 +144,7 @@ pub async fn get_profile(
 // ============================================================================
 
 pub async fn get_settings(req: HttpRequest, state: web::Data<AppState>) -> Result<HttpResponse> {
-    let claims = match state.auth.extract_claims(&req) {
+    let claims = match state.auth.extract_claims(&req).await {
         Ok(c) => c,
         Err(_) => {
             return Ok(HttpResponse::Unauthorized().json(ErrorResponse {
@@ -246,7 +246,7 @@ pub async fn update_settings(
         }));
     }
 
-    let claims = match state.auth.extract_claims(&req) {
+    let claims = match state.auth.extract_claims(&req).await {
         Ok(c) => c,
         Err(_) => {
             return Ok(HttpResponse::Unauthorized().json(ErrorResponse {
@@ -430,7 +430,7 @@ pub async fn update_profile_picture(
     mut payload: Multipart,
     state: web::Data<AppState>,
 ) -> Result<HttpResponse> {
-    let claims = match state.auth.extract_claims(&req) {
+    let claims = match state.auth.extract_claims(&req).await {
         Ok(c) => c,
         Err(_) => {
             return Ok(HttpResponse::Unauthorized().json(ErrorResponse {
@@ -602,7 +602,7 @@ pub async fn change_password(
         }));
     }
 
-    let claims = match state.auth.extract_claims(&req) {
+    let claims = match state.auth.extract_claims(&req).await {
         Ok(c) => c,
         Err(_) => {
             return Ok(HttpResponse::Unauthorized().json(ErrorResponse {
@@ -702,7 +702,7 @@ pub async fn change_password(
 // ============================================================================
 
 pub async fn delete_avatar(req: HttpRequest, state: web::Data<AppState>) -> Result<HttpResponse> {
-    let claims = match state.auth.extract_claims(&req) {
+    let claims = match state.auth.extract_claims(&req).await {
         Ok(c) => c,
         Err(_) => {
             return Ok(HttpResponse::Unauthorized().json(ErrorResponse {
@@ -767,7 +767,7 @@ pub async fn admin_search_users(
     query: web::Query<UserSearchQuery>,
     state: web::Data<AppState>,
 ) -> Result<HttpResponse> {
-    let claims = match state.auth.extract_claims(&req) {
+    let claims = match state.auth.extract_claims(&req).await {
         Ok(c) => c,
         Err(_) => {
             return Ok(HttpResponse::Unauthorized().json(ErrorResponse {
@@ -851,7 +851,7 @@ pub async fn admin_update_user(
         }));
     }
 
-    let claims = match state.auth.extract_claims(&req) {
+    let claims = match state.auth.extract_claims(&req).await {
         Ok(c) => c,
         Err(_) => {
             return Ok(HttpResponse::Unauthorized().json(ErrorResponse {
@@ -947,7 +947,7 @@ pub async fn admin_update_user(
 // ============================================================================
 
 pub async fn get_user_roles(req: HttpRequest, state: web::Data<AppState>) -> Result<HttpResponse> {
-    let claims = match state.auth.extract_claims(&req) {
+    let claims = match state.auth.extract_claims(&req).await {
         Ok(c) => c,
         Err(_) => {
             return Ok(HttpResponse::Unauthorized().json(ErrorResponse {
@@ -986,7 +986,7 @@ pub async fn update_user_role(
         }));
     }
 
-    let claims = match state.auth.extract_claims(&req) {
+    let claims = match state.auth.extract_claims(&req).await {
         Ok(c) => c,
         Err(_) => {
             return Ok(HttpResponse::Unauthorized().json(ErrorResponse {
@@ -1055,7 +1055,7 @@ pub async fn get_user_activity(
     query: web::Query<ActivityQuery>,
     state: web::Data<AppState>,
 ) -> Result<HttpResponse> {
-    let claims = match state.auth.extract_claims(&req) {
+    let claims = match state.auth.extract_claims(&req).await {
         Ok(c) => c,
         Err(_) => {
             return Ok(HttpResponse::Unauthorized().json(ErrorResponse {
@@ -1122,7 +1122,7 @@ pub async fn export_user_data(
     req: HttpRequest,
     state: web::Data<AppState>,
 ) -> Result<HttpResponse> {
-    let claims = match state.auth.extract_claims(&req) {
+    let claims = match state.auth.extract_claims(&req).await {
         Ok(c) => c,
         Err(_) => {
             return Ok(HttpResponse::Unauthorized().json(ErrorResponse {
@@ -1223,7 +1223,7 @@ pub async fn import_user_data(
     body: web::Json<DataImportRequest>,
     state: web::Data<AppState>,
 ) -> Result<HttpResponse> {
-    let claims = match state.auth.extract_claims(&req) {
+    let claims = match state.auth.extract_claims(&req).await {
         Ok(c) => c,
         Err(_) => {
             return Ok(HttpResponse::Unauthorized().json(ErrorResponse {

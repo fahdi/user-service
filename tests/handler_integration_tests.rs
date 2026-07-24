@@ -75,8 +75,9 @@ fn bearer(token: &str) -> (&str, String) {
 
 struct MockAuthExtractor;
 
+#[async_trait::async_trait(?Send)]
 impl AuthExtractor for MockAuthExtractor {
-    fn extract_claims(&self, req: &HttpRequest) -> Result<Claims, actix_web::Error> {
+    async fn extract_claims(&self, req: &HttpRequest) -> Result<Claims, actix_web::Error> {
         let auth_header = req
             .headers()
             .get("authorization")
@@ -670,7 +671,7 @@ mod handlers {
         query: web::Query<serde_json::Value>,
         state: web::Data<AppState>,
     ) -> ActixResult<HttpResponse> {
-        let claims = match state.auth.extract_claims(&req) {
+        let claims = match state.auth.extract_claims(&req).await {
             Ok(c) => c,
             Err(_) => {
                 return Ok(HttpResponse::Unauthorized().json(ErrorResponse {
@@ -788,7 +789,7 @@ mod handlers {
         req: HttpRequest,
         state: web::Data<AppState>,
     ) -> ActixResult<HttpResponse> {
-        let claims = match state.auth.extract_claims(&req) {
+        let claims = match state.auth.extract_claims(&req).await {
             Ok(c) => c,
             Err(_) => {
                 return Ok(HttpResponse::Unauthorized().json(ErrorResponse {
@@ -887,7 +888,7 @@ mod handlers {
             }));
         }
 
-        let claims = match state.auth.extract_claims(&req) {
+        let claims = match state.auth.extract_claims(&req).await {
             Ok(c) => c,
             Err(_) => {
                 return Ok(HttpResponse::Unauthorized().json(ErrorResponse {
@@ -1040,7 +1041,7 @@ mod handlers {
             }));
         }
 
-        let claims = match state.auth.extract_claims(&req) {
+        let claims = match state.auth.extract_claims(&req).await {
             Ok(c) => c,
             Err(_) => {
                 return Ok(HttpResponse::Unauthorized().json(ErrorResponse {
@@ -1140,7 +1141,7 @@ mod handlers {
         req: HttpRequest,
         state: web::Data<AppState>,
     ) -> ActixResult<HttpResponse> {
-        let claims = match state.auth.extract_claims(&req) {
+        let claims = match state.auth.extract_claims(&req).await {
             Ok(c) => c,
             Err(_) => {
                 return Ok(HttpResponse::Unauthorized().json(ErrorResponse {
@@ -1201,7 +1202,7 @@ mod handlers {
         req: HttpRequest,
         state: web::Data<AppState>,
     ) -> ActixResult<HttpResponse> {
-        let claims = match state.auth.extract_claims(&req) {
+        let claims = match state.auth.extract_claims(&req).await {
             Ok(c) => c,
             Err(_) => {
                 return Ok(HttpResponse::Unauthorized().json(ErrorResponse {
@@ -1236,7 +1237,7 @@ mod handlers {
             }));
         }
 
-        let claims = match state.auth.extract_claims(&req) {
+        let claims = match state.auth.extract_claims(&req).await {
             Ok(c) => c,
             Err(_) => {
                 return Ok(HttpResponse::Unauthorized().json(ErrorResponse {
@@ -1301,7 +1302,7 @@ mod handlers {
         query: web::Query<ActivityQuery>,
         state: web::Data<AppState>,
     ) -> ActixResult<HttpResponse> {
-        let claims = match state.auth.extract_claims(&req) {
+        let claims = match state.auth.extract_claims(&req).await {
             Ok(c) => c,
             Err(_) => {
                 return Ok(HttpResponse::Unauthorized().json(ErrorResponse {
@@ -1357,7 +1358,7 @@ mod handlers {
         req: HttpRequest,
         state: web::Data<AppState>,
     ) -> ActixResult<HttpResponse> {
-        let claims = match state.auth.extract_claims(&req) {
+        let claims = match state.auth.extract_claims(&req).await {
             Ok(c) => c,
             Err(_) => {
                 return Ok(HttpResponse::Unauthorized().json(ErrorResponse {
@@ -1454,7 +1455,7 @@ mod handlers {
         body: web::Json<DataImportRequest>,
         state: web::Data<AppState>,
     ) -> ActixResult<HttpResponse> {
-        let claims = match state.auth.extract_claims(&req) {
+        let claims = match state.auth.extract_claims(&req).await {
             Ok(c) => c,
             Err(_) => {
                 return Ok(HttpResponse::Unauthorized().json(ErrorResponse {
@@ -1548,7 +1549,7 @@ mod handlers {
         query: web::Query<UserSearchQuery>,
         state: web::Data<AppState>,
     ) -> ActixResult<HttpResponse> {
-        let claims = match state.auth.extract_claims(&req) {
+        let claims = match state.auth.extract_claims(&req).await {
             Ok(c) => c,
             Err(_) => {
                 return Ok(HttpResponse::Unauthorized().json(ErrorResponse {
@@ -1628,7 +1629,7 @@ mod handlers {
             }));
         }
 
-        let claims = match state.auth.extract_claims(&req) {
+        let claims = match state.auth.extract_claims(&req).await {
             Ok(c) => c,
             Err(_) => {
                 return Ok(HttpResponse::Unauthorized().json(ErrorResponse {
