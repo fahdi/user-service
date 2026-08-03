@@ -48,6 +48,8 @@ pub struct StandardizedUser {
     pub created_at: String,
     #[serde(rename = "updatedAt")]
     pub updated_at: String,
+    #[serde(rename = "lastLoginAt", skip_serializing_if = "Option::is_none")]
+    pub last_login: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub phone: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -348,6 +350,7 @@ mod tests {
             email_verified: true,
             created_at: "2025-01-01".to_string(),
             updated_at: "2025-01-02".to_string(),
+            last_login: None,
             phone: None,
             company: None,
             department: None,
@@ -398,6 +401,7 @@ mod tests {
             email_verified: false,
             created_at: "".to_string(),
             updated_at: "".to_string(),
+            last_login: None,
             phone: None,
             company: None,
             department: None,
@@ -835,6 +839,7 @@ mod tests {
                 email_verified: true,
                 created_at: "".to_string(),
                 updated_at: "".to_string(),
+                last_login: None,
                 phone: None,
                 company: None,
                 department: None,
