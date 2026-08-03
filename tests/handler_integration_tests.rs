@@ -419,6 +419,10 @@ mod handler_helpers {
                 .get_datetime("updatedAt")
                 .map(|dt| dt.try_to_rfc3339_string().unwrap_or_default())
                 .unwrap_or_else(|_| chrono::Utc::now().to_rfc3339()),
+            last_login: user
+                .get_datetime("lastLogin")
+                .ok()
+                .and_then(|dt| dt.try_to_rfc3339_string().ok()),
             phone: user.get_str("phone").ok().map(|s| s.to_string()),
             company: user.get_str("company").ok().map(|s| s.to_string()),
             department: user.get_str("department").ok().map(|s| s.to_string()),

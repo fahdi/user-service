@@ -37,6 +37,10 @@ pub fn standardize_user_doc(user: &Document) -> Result<StandardizedUser, String>
             .get_datetime("updatedAt")
             .map(|dt| dt.try_to_rfc3339_string().unwrap_or_default())
             .unwrap_or_else(|_| chrono::Utc::now().to_rfc3339()),
+        last_login: user
+            .get_datetime("lastLogin")
+            .ok()
+            .and_then(|dt| dt.try_to_rfc3339_string().ok()),
         phone: user.get_str("phone").ok().map(|s| s.to_string()),
         company: user.get_str("company").ok().map(|s| s.to_string()),
         department: user.get_str("department").ok().map(|s| s.to_string()),
@@ -525,6 +529,41 @@ mod tests {
         assert!(user.profile_picture.is_none());
         assert!(user.use_gravatar.is_none());
         assert!(user.location.is_none());
+    }
+
+    #[test]
+    fn test_standardize_user_doc_maps_last_login() {
+        // auth-service writes `lastLogin` on every successful login; the admin
+        // UI reads `lastLoginAt`. The field must survive standardization.
+        let oid = ObjectId::new();
+        let last_login = BsonDateTime::now();
+        let user_doc = doc! { "_id": oid, "lastLogin": last_login };
+
+        let user = standardize_user_doc(&user_doc).unwrap();
+        let expected = last_login.try_to_rfc3339_string().unwrap();
+        assert_eq!(user.last_login, Some(expected));
+
+        let json = serde_json::to_value(&user).unwrap();
+        assert!(
+            json["lastLoginAt"].is_string(),
+            "lastLoginAt must serialize as a string, got: {}",
+            json["lastLoginAt"]
+        );
+    }
+
+    #[test]
+    fn test_standardize_user_doc_omits_last_login_when_never_logged_in() {
+        let oid = ObjectId::new();
+        let user_doc = doc! { "_id": oid };
+
+        let user = standardize_user_doc(&user_doc).unwrap();
+        assert!(user.last_login.is_none());
+
+        let json = serde_json::to_value(&user).unwrap();
+        assert!(
+            json.get("lastLoginAt").is_none(),
+            "lastLoginAt key must be omitted when the user never logged in"
+        );
     }
 
     #[test]

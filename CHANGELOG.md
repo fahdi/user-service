@@ -1,3 +1,8 @@
+## 2026-08-03 - Fix: admin user list always showed Last Login "Never" (#20)
+
+### Fixed
+- auth-service writes `lastLogin` (BSON DateTime) on every successful login, but `StandardizedUser` had no last-login field and `standardize_user_doc` dropped it, so `GET /api/admin/users` never exposed it and the app's User Management page showed "Never" for everyone. Spec-first: RED tests assert a `lastLogin` document date standardizes to a `lastLoginAt` RFC3339 string and that the key is omitted for never-logged-in users. Fix: `last_login: Option<String>` (serialized `lastLoginAt`, skip-if-none) populated in `standardize_user_doc`; cache-service constructors carry `None` (profile cache does not store it). 414 tests, clippy zero warnings.
+
 ## 2026-05-31 - Track Cargo.lock for reproducible Docker builds (#138)
 
 ## 2026-07-24 - Security: honor the auth-service blacklist (#18)
