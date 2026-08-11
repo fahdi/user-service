@@ -35,7 +35,6 @@ src/
 │   └── mod.rs
 ├── middleware/
 │   ├── auth.rs          # JWT extraction from Authorization header (HS256)
-│   ├── rate_limit.rs    # Actix Transform middleware (Redis + LRU fallback)
 │   └── mod.rs
 └── utils/
     ├── security.rs      # generate_secure_password, validate_email, escape_regex
@@ -78,7 +77,7 @@ src/
 - **Google Drive storage**: Profile pictures uploaded to user-specific Drive folders, made publicly readable
 - **simd-json optimization**: `optimize_json_response()` uses simd-json with serde_json fallback
 - **Database indexes**: Created on startup (email unique, profilePicture sparse, updatedAt desc)
-- **Rate limiting**: Actix Transform middleware with configurable windows (auth: 10/min, API: 100/min, admin: 200/min)
+- **No rate limiting**: this service has none; abuse throttling happens at auth-service's per-endpoint limits. (A never-compiled Transform implementation was removed in #26.)
 - **DI traits**: `UserRepository`, `CacheService`, `FileUploader`, `AuthExtractor` in `traits.rs` for testable handlers (fully wired via AppState in main.rs with concrete impls)
 - **Node.js API compatibility**: All responses match exact field names from the Node.js predecessor (camelCase)
 
@@ -122,7 +121,6 @@ cargo clippy       # Zero warnings required
 - `mockall 0.13` available for trait mocking
 - Security tests: password generation uniqueness, email validation edge cases, regex escaping
 - Auth tests: Claims serialization with camelCase field renames
-- Rate limit middleware tests: window-based counting, fallback behavior
 
 ## Docker
 
