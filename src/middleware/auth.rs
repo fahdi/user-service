@@ -130,6 +130,20 @@ pub async fn validate_bearer_with(
     }
 }
 
+/// Resolve the JWT secret for request handling. Missing configuration is a
+/// server error response (500), never a panic: `extract_claims_from_request`
+/// runs inside 13 request handlers, and unwinding there aborts the
+/// connection while /health keeps passing. Takes the env result as input so
+/// tests need no env-var mutation (which races parallel tests).
+pub fn jwt_secret_from(
+    var: Result<String, std::env::VarError>,
+) -> Result<String, actix_web::Error> {
+    var.map_err(|_| {
+        log::error!("JWT_SECRET is not set; rejecting authenticated request");
+        actix_web::error::ErrorInternalServerError("Server configuration error")
+    })
+}
+
 // Simple JWT extractor for handlers
 pub async fn extract_claims_from_request(
     req: &actix_web::HttpRequest,
@@ -147,9 +161,7 @@ pub async fn extract_claims_from_request(
     }
 
     let token = &auth_header[7..];
-    let jwt_secret = env::var("JWT_SECRET").expect(
-        "JWT_SECRET environment variable must be set — refusing to start with insecure default",
-    );
+    let jwt_secret = jwt_secret_from(env::var("JWT_SECRET"))?;
     let auth_service_url =
         env::var("AUTH_SERVICE_URL").unwrap_or_else(|_| "http://auth-service:8080".to_string());
 
