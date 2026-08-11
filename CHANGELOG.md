@@ -1,3 +1,8 @@
+## 2026-08-11 - Chore: phantom rate limiting removed from code and docs (#26)
+
+### Removed
+- `src/middleware/rate_limit.rs` - 238 lines of a complete Actix Transform (Redis + LRU fallback) that never compiled: `mod.rs` had it commented out ("TODO: Fix middleware type issues") and `main.rs` wired nothing. The tracked CLAUDE.md meanwhile claimed live rate limiting with specific per-scope windows and tests that never existed. File deleted, docs corrected to state plainly that this service has no rate limiting (throttling happens at auth-service). New `doc_truth` guard test: when no rate_limit module is declared, CLAUDE.md must not claim one. Real limits for password/admin routes remain a feature decision. 418 tests, clippy zero warnings.
+
 ## 2026-08-11 - Fix: missing JWT_SECRET no longer panics per-request behind a green /health (#24)
 
 ### Fixed
