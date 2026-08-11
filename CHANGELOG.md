@@ -1,4 +1,9 @@
 ## 2026-08-11 - Chore: four unused dependencies removed; tokio moved to dev-dependencies (#31)
+## 2026-08-12 - Build from the committed lockfile (infra#49)
+
+### Changed
+- Every `cargo build` in the builder now passes `--locked`. The lockfile was already copied, but without `--locked` a `Cargo.toml` edit that stales the lock would silently re-resolve at build time instead of failing.
+- Fleet-wide: measured divergence was zero at the time (utilities-forms resolved from a bare `Cargo.toml` gave the same 419 package versions as its committed lock). The failure mode is not a bad version today, it is that the agreement decays silently on the next semver-compatible release of any transitive dependency, while `cargo audit` keeps reporting green about a `Cargo.lock` the image ignores. Guarded by `infra/tests/check-dockerfile-lockfile.sh`.
 
 ### Changed
 - `actix-web-httpauth`, `uuid`, `anyhow`, `thiserror` removed - declared with zero references anywhere. `tokio` moved from dependencies to dev-dependencies: `src/` never touches it (this service runs on Actix's runtime), but `tests/unit_tests.rs` uses `#[tokio::test]`, so shipping tokio's `full` feature set in the release profile was surface nobody needed. Compiler-verified across all targets: 418 tests green, clippy clean, release build succeeds. Found via super#177's sweep; the tokio case is why that sweep verifies with `cargo check --all-targets` rather than trusting a `src/`-only scan.

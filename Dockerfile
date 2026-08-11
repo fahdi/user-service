@@ -16,14 +16,14 @@ COPY Cargo.toml Cargo.lock ./
 
 # Create dummy source files to build dependencies
 RUN mkdir src && echo "fn main() {}" > src/main.rs && echo "pub fn lib_placeholder() {}" > src/lib.rs
-RUN cargo build --release
+RUN cargo build --release --locked
 RUN rm -rf src target/release/deps/user_service* target/release/deps/libuser_service* target/release/user-service target/release/.fingerprint/user-service*
 
 # Copy source code
 COPY src ./src
 
 # Build the actual application
-RUN cargo build --release
+RUN cargo build --release --locked
 
 # Runtime stage - use slim image for smaller size
 FROM debian:bookworm-slim
