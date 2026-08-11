@@ -1,3 +1,8 @@
+## 2026-08-11 - Security: a 429 from auth-service no longer resurrects revoked tokens (#22)
+
+### Fixed
+- **High**: `verify_with_auth_service` parsed the validate-response JSON without inspecting the HTTP status. auth-service's rate-limit rejection is a 429 whose body lacks the `valid` field, so deserialization failed and the middleware treated it as `Unavailable`, falling back to blacklist-free local validation - a revoked-token holder could get it honored by driving this service's egress IP over auth-service's validate limit. The status is now inspected first: any 4xx is `Rejected` (a verdict), transport errors and 5xx are `Unavailable` (an outage). Spec-first: RED spec in `blacklist_honoring_spec` pins 429 to rejection despite a valid local signature; a companion spec pins 5xx to the local-fallback escape hatch. Same fix as file-management#23; projects-api tracked separately. 416 tests, clippy zero warnings.
+
 ## 2026-08-03 - Fix: admin user list always showed Last Login "Never" (#20)
 
 ### Fixed

@@ -58,6 +58,18 @@ async fn verify_with_auth_service(auth_service_url: &str, token: &str) -> Remote
         Err(_) => return RemoteValidation::Unavailable,
     };
 
+    // Inspect the status before parsing: auth-service's 4xx responses (401,
+    // 403, and 429 rate-limit rejections) carry bodies without the `valid`
+    // field, and a parse failure must not be misread as an outage. A 4xx is
+    // a verdict on the request; only transport errors and 5xx are outages.
+    let status = response.status();
+    if status.is_client_error() {
+        return RemoteValidation::Rejected;
+    }
+    if !status.is_success() {
+        return RemoteValidation::Unavailable;
+    }
+
     let result: ValidateResponse = match response.json().await {
         Ok(v) => v,
         Err(_) => return RemoteValidation::Unavailable,
