@@ -1,3 +1,8 @@
+## 2026-08-11 - Chore: dead pre-DI handler twin deleted (#29)
+
+### Removed
+- `src/handlers/user_handlers.rs` - 1089 lines (0% coverage) duplicating di_handlers' endpoints (admin_update_user, profile, settings, export/import); the pre-dependency-injection implementation left behind by the DI migration. main.rs imports exclusively from di_handlers and the only code reference was the module's own `pub mod` line. Deadness proven mechanically: removing the declaration compiles clean (compiler-as-RED - a red build would have aborted the deletion). Removes ~24% of the crate's uncovered surface and the drift hazard of twin implementations (the #28 native-date sites existed in both files). Stale comments and CLAUDE.md's structure listing corrected. 418 tests, clippy zero warnings.
+
 ## 2026-08-11 - Chore: phantom rate limiting removed from code and docs (#26)
 
 ### Removed

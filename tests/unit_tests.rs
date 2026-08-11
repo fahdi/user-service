@@ -120,7 +120,7 @@ mod objectid_validation_tests {
 #[cfg(test)]
 mod cache_key_format_tests {
     // Tests that cache key formats are consistent and correct
-    // These mirror the key formats used in cache_service.rs and user_handlers.rs
+    // These mirror the key formats used in cache_service.rs and di_handlers.rs
 
     #[test]
     fn test_profile_cache_key_format() {
