@@ -20,7 +20,7 @@ src/
 ├── impls.rs             # Concrete trait implementations (MongoUserRepository, RedisCacheService, etc.)
 ├── impls.rs             # Concrete trait implementations (MongoUserRepository, RedisCacheService, etc.)
 ├── handlers/
-│   ├── user_handlers.rs # All route handlers (profile, settings, roles, admin, data export/import)
+│   ├── di_handlers.rs   # All route handlers (profile, settings, roles, admin, data export/import) - trait-based DI
 │   ├── helpers.rs       # Pure helper functions (standardization, pagination, validation)
 │   ├── di_handlers.rs   # Trait-based handler variants for DI testing
 │   └── mod.rs

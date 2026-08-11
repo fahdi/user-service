@@ -1,4 +1,4 @@
-//! Pure business logic extracted from user_handlers.rs for testability.
+//! Pure business logic extracted from the user handlers for testability.
 //!
 //! Every function here is synchronous, takes simple inputs, and returns simple outputs.
 //! No database connections, no HTTP requests, no async — just logic.
