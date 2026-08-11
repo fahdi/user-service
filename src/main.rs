@@ -98,6 +98,14 @@ async fn create_database_indexes() -> Result<(), Box<dyn std::error::Error>> {
 async fn main() -> std::io::Result<()> {
     env_logger::init();
 
+    // Fail fast: every authenticated request needs JWT_SECRET, and a missing
+    // value must stop the service at startup instead of surfacing as
+    // per-request errors behind a green /health (issue #24).
+    if env::var("JWT_SECRET").is_err() {
+        log::error!("JWT_SECRET environment variable must be set - refusing to start");
+        return Err(std::io::Error::other("JWT_SECRET not configured"));
+    }
+
     let port = env::var("PORT").unwrap_or_else(|_| "8081".to_string());
     log::info!("Starting User Service on port {}", port);
 

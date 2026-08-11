@@ -1,3 +1,8 @@
+## 2026-08-11 - Fix: missing JWT_SECRET no longer panics per-request behind a green /health (#24)
+
+### Fixed
+- `extract_claims_from_request` resolved the secret with `env::var("JWT_SECRET").expect(...)` - a message claiming the service refuses to start, which was false: `main.rs` never checked it, so the service booted, `/health` passed the Docker healthcheck, and every authenticated request panicked the worker across all 13 handlers using the extractor. Two-part fix: (1) request path goes through a pure `jwt_secret_from(env_result)` helper that returns a 500 error response instead of panicking (takes the env result as input so tests need no racy env mutation); (2) `main()` fails fast at startup with a clear log when JWT_SECRET is unset, matching sibling services. The self-described placebo test (`let _ = std::env::var("JWT_SECRET")`) replaced with real RED-first specs for both helper outcomes. 417 tests, clippy zero warnings.
+
 ## 2026-08-11 - Security: a 429 from auth-service no longer resurrects revoked tokens (#22)
 
 ### Fixed

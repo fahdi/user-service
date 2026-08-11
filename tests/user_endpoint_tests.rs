@@ -675,14 +675,28 @@ mod security_audit_tests {
     // ---- Issue #2: JWT secret required ----
 
     #[test]
-    fn test_jwt_secret_required_env_var() {
-        // The extract_claims_from_request function should panic when JWT_SECRET
-        // is not set. We can't easily test the panic in an integration test
-        // without starting the full app, so we test the helper instead.
-        // The middleware code now calls env::var("JWT_SECRET").expect(...)
-        // which will panic if not set. This is validated at code review level.
-        // We verify the helper functions exist and work:
-        let _ = std::env::var("JWT_SECRET"); // just exercise the call
+    fn test_missing_jwt_secret_is_an_error_response_not_a_panic() {
+        // extract_claims_from_request runs inside 13 request handlers; a
+        // missing JWT_SECRET must surface as a 500 error response, never a
+        // per-request panic while /health stays green (issue #24). The helper
+        // takes the env result as input because env-var mutation races
+        // parallel tests.
+        use user_service::middleware::auth::jwt_secret_from;
+
+        let result = jwt_secret_from(Err(std::env::VarError::NotPresent));
+        let err = result.expect_err("missing JWT_SECRET must be an error");
+        assert_eq!(
+            err.as_response_error().status_code(),
+            actix_web::http::StatusCode::INTERNAL_SERVER_ERROR
+        );
+    }
+
+    #[test]
+    fn test_present_jwt_secret_passes_through() {
+        use user_service::middleware::auth::jwt_secret_from;
+
+        let result = jwt_secret_from(Ok("a-configured-secret".to_string()));
+        assert_eq!(result.unwrap(), "a-configured-secret");
     }
 
     // ---- Issue #4: Regex escaping ----
