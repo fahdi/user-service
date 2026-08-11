@@ -802,4 +802,48 @@ mod blacklist_honoring_spec {
             .await
             .is_err());
     }
+
+    #[tokio::test]
+    async fn remote_429_is_a_rejection_not_a_fallback() {
+        // auth-service rate-limit responses are 429 with {success, error} and
+        // NO `valid` field. Parsing that body fails; treating the parse
+        // failure as Unavailable falls back to blacklist-free local
+        // validation, resurrecting revoked tokens (issue #22).
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .and(wiremock::matchers::path("/api/auth/validate"))
+            .respond_with(wiremock::ResponseTemplate::new(429).set_body_json(
+                serde_json::json!({ "success": false, "error": "Too many requests" }),
+            ))
+            .mount(&server)
+            .await;
+
+        let token = local_token("s3cret");
+        assert!(
+            validate_bearer_with(&server.uri(), &token, "s3cret")
+                .await
+                .is_err(),
+            "a 4xx from auth-service is a verdict, not an outage; it must not fall back locally"
+        );
+    }
+
+    #[tokio::test]
+    async fn remote_5xx_falls_back_to_local_validation() {
+        // A crashed auth-service is an availability problem, not a verdict on
+        // the token: the escape hatch must keep working.
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .and(wiremock::matchers::path("/api/auth/validate"))
+            .respond_with(wiremock::ResponseTemplate::new(500))
+            .mount(&server)
+            .await;
+
+        let token = local_token("s3cret");
+        assert!(validate_bearer_with(&server.uri(), &token, "s3cret")
+            .await
+            .is_ok());
+        assert!(validate_bearer_with(&server.uri(), "garbage", "s3cret")
+            .await
+            .is_err());
+    }
 }
