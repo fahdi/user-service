@@ -17,6 +17,26 @@
 - Re-swept the fleet afterwards: **no service now places raw error text in a response body.**
 - 431 tests pass, clippy clean.
 
+## 2026-08-12 - A rejected sharing request reported success (#53)
+
+### Fixed
+- `make_file_public` sent the request and discarded the response into `let _response`. `?` covers transport failures only, so a 403, 404 or 401 from Drive is a perfectly successful HTTP exchange: the status was never inspected and the function returned `Ok(())`.
+- It now checks the status, logs the status and body on failure, and returns an error.
+
+### Consequence
+- This is the last step of the avatar upload chain. When it failed the file existed in Drive but was readable by nobody, while the caller was told the upload succeeded. The stored `profilePictureUrl` then 404d for every viewer, and nothing appeared in the logs because nothing looked.
+- The `_` prefix on `_response` suppressed the unused-variable warning that would have pointed at it.
+
+### Why this one and not the other three
+- The module's other Drive calls catch failures **incidentally**: they parse the response body and `.ok_or_else` on a missing `id` field, which an error body happens not to carry. A sharing request has no such field to lean on, so this call had no detection at all.
+
+### Precedent
+- auth-service's `send_transactional_email` carries a comment describing this same defect being fixed there: sends were fire-and-forget and silently swallowed failures, including one call site that never sent anything.
+
+### Tests
+- `a_rejected_sharing_request_is_an_error`: a 403 must produce an error. Fails with the status check removed.
+- `an_accepted_sharing_request_is_ok`: a 200 must still succeed, so the check cannot be over-tightened into rejecting real responses.
+
 ## 2026-08-12 - Three unbounded Drive clients on the avatar upload path (#51)
 
 ### Fixed
