@@ -2,14 +2,7 @@ use actix_web::{middleware::Logger, web, App, HttpServer};
 use mongodb::bson::Document;
 use std::env;
 
-use user_service::{
-    handlers::di_handlers::{
-        admin_search_users, admin_update_user, change_password, delete_avatar, export_user_data,
-        get_profile, get_settings, get_user_activity, get_user_roles, import_user_data,
-        update_profile_picture, update_settings, update_user_role,
-    },
-    health, init_mongodb_client, init_redis_pool,
-};
+use user_service::{init_mongodb_client, init_redis_pool};
 
 // Phase 4: Database index creation for user service optimization
 async fn create_database_indexes() -> Result<(), Box<dyn std::error::Error>> {
@@ -149,29 +142,14 @@ async fn main() -> std::io::Result<()> {
     let app_state = web::Data::new(user_service::impls::build_app_state());
 
     HttpServer::new(move || {
+        // The route table lives in `user_service::configure_routes`, not here.
+        // It used to be inline, where no test could mount it, so the tests
+        // rebuilt fragments route by route and covered only what someone
+        // remembered to write (#44).
         App::new()
             .wrap(Logger::default())
             .app_data(app_state.clone())
-            .route("/health", web::get().to(health))
-            .service(
-                web::scope("/api/users")
-                    .route("/profile", web::get().to(get_profile))
-                    .route("/profile-picture", web::post().to(update_profile_picture))
-                    .route("/avatar", web::delete().to(delete_avatar))
-                    .route("/settings", web::get().to(get_settings))
-                    .route("/settings", web::put().to(update_settings))
-                    .route("/change-password", web::post().to(change_password))
-                    .route("/roles", web::get().to(get_user_roles))
-                    .route("/roles", web::put().to(update_user_role))
-                    .route("/activity", web::get().to(get_user_activity))
-                    .route("/export", web::get().to(export_user_data))
-                    .route("/import", web::post().to(import_user_data)),
-            )
-            .service(
-                web::scope("/api/admin/users")
-                    .route("", web::get().to(admin_search_users))
-                    .route("/{id}", web::put().to(admin_update_user)),
-            )
+            .configure(user_service::configure_routes)
     })
     .bind(format!("0.0.0.0:{}", port))?
     .run()

@@ -1,3 +1,21 @@
+## 2026-08-12 - One route table, and authentication now precedes validation (#44, #45)
+
+### Added
+- `configure_routes`, the production route table in exactly one place, matching what auth-service already does. `main.rs` now declares **zero routes of its own**; it used to build all fourteen inline where nothing could mount them, so the tests rebuilt fragments route by route and covered only the routes someone remembered to write.
+- A test that mounts the real table with an `AuthExtractor` that rejects everything and requires **every** protected route to answer 401. Authentication here is a per-handler convention rather than a middleware, so nothing structural held it in place: a fourteenth handler that forgot `extract_claims` would have looked exactly like its neighbours.
+
+### Fixed (#45, found by that test)
+- `update_settings`, `change_password`, `update_user_role` and `admin_update_user` ran `body.validate()` **before** `extract_claims`, so an anonymous caller received validation feedback from endpoints they had no right to address. `change_password` handed out the password policy; the admin routes confirmed the shape of admin request bodies to someone who was not even a user.
+- Not an authentication bypass: each handler did authenticate before touching data. The defect is that the cheaper and more fundamental check ran second.
+
+### Test design, after getting it wrong twice
+- The first version sent no body. Actix runs `web::Json<T>` extraction **before** the handler exists, so unparseable bodies answered 400 with no handler code running. That is a framework property, not a missing auth check, and asserting against it would have tested the deserializer.
+- The second version sent `{}`, which still failed to deserialize. Valid payloads per route are what make the handler run and its authentication observable.
+- **That fix then hid #45**: with valid payloads, validation succeeds and both orders reach the auth check, so the ordering mutation passed. A separate test now sends a body that **deserializes but fails validation**, which is the only shape that distinguishes the two orders.
+- Both mutation-verified: restoring validation-before-auth fails `authentication_precedes_body_validation`, and it does **not** fail the route sweep, which is exactly why both tests are needed.
+
+430 tests pass, clippy clean.
+
 ## 2026-08-12 - /health could not fail, so an unreachable MongoDB reported healthy (#42)
 
 ### Fixed
