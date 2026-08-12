@@ -98,11 +98,17 @@ async fn create_database_indexes() -> Result<(), Box<dyn std::error::Error>> {
 async fn main() -> std::io::Result<()> {
     env_logger::init();
 
-    // Fail fast: every authenticated request needs JWT_SECRET, and a missing
-    // value must stop the service at startup instead of surfacing as
+    // Fail fast: every authenticated request needs JWT_SECRET, and an
+    // unusable value must stop the service at startup instead of surfacing as
     // per-request errors behind a green /health (issue #24).
-    if env::var("JWT_SECRET").is_err() {
-        log::error!("JWT_SECRET environment variable must be set - refusing to start");
+    //
+    // This checked `is_err()`, which only catches a *missing* variable.
+    // `env::var` returns `Ok("")` for a set-but-empty one, and production
+    // compose substitutes an unset host variable as `""` - the case that
+    // actually occurs (infra#55). Reuses the same validation the auth
+    // middleware applies, so startup and request handling cannot disagree.
+    if let Err(e) = user_service::middleware::auth::jwt_secret_from(env::var("JWT_SECRET")) {
+        log::error!("JWT_SECRET is missing or unusable - refusing to start: {e}");
         return Err(std::io::Error::other("JWT_SECRET not configured"));
     }
 

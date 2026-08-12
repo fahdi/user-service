@@ -1,4 +1,17 @@
 ## 2026-08-11 - Chore: four unused dependencies removed; tokio moved to dev-dependencies (#31)
+## 2026-08-12 - Security: reject an empty or short JWT_SECRET (infra#55)
+
+### Security
+- `jwt_secret_from()` mapped only the `Err` arm, and `main()` gated startup on `env::var(..).is_err()`. Both ask whether the variable is **set**, which is a different question from whether it is **usable**: `env::var` returns `Ok("")` for a set-but-empty variable, so an empty string flowed through as the signing key. HMAC-SHA256 with an empty key is valid, so tokens signed with nothing would have verified.
+- `docker-compose.production.yml` uses `JWT_SECRET=${JWT_SECRET}` with no default, and Compose substitutes an unset host variable as `""` - the case that actually occurs. The startup comment already stated the right intent, "must stop the service at startup instead of surfacing as per-request errors behind a green /health", but `is_err()` did not fire on it.
+- `jwt_secret_from()` now rejects empty, whitespace-only and anything under 32 characters, matching the floor utilities-forms, auth-service and projects-api enforce. `main()` calls the **same function**, so startup and request handling cannot disagree about what counts as usable.
+- Verified by mutation: reverting to the `Err`-only form fails all three rejection tests while both acceptance tests correctly keep passing. One test pins the secret `infra/local-dev/docker-compose.dev.yml` actually supplies, so this cannot break the environment it ships with.
+- The tests need no process-environment mutation: `jwt_secret_from` already took the lookup result as a parameter, which is what made this cheap to test properly.
+- One existing fixture was 19 characters and was lengthened; its intent, that a present secret passes through unchanged, is unaffected.
+- 423 tests pass, clippy clean.
+
+### Fixed
+- `CLAUDE.md` test count refreshed to 423.
 ## 2026-08-12 - Docs: correct a stale test count in CLAUDE.md
 
 ### Fixed
