@@ -239,13 +239,6 @@ pub async fn update_settings(
     body: web::Json<SettingsUpdateRequest>,
     state: web::Data<AppState>,
 ) -> Result<HttpResponse> {
-    if let Err(validation_errors) = body.validate() {
-        return Ok(HttpResponse::BadRequest().json(ErrorResponse {
-            success: false,
-            error: collect_validation_errors(&validation_errors),
-        }));
-    }
-
     let claims = match state.auth.extract_claims(&req).await {
         Ok(c) => c,
         Err(_) => {
@@ -255,6 +248,13 @@ pub async fn update_settings(
             }));
         }
     };
+
+    if let Err(validation_errors) = body.validate() {
+        return Ok(HttpResponse::BadRequest().json(ErrorResponse {
+            success: false,
+            error: collect_validation_errors(&validation_errors),
+        }));
+    }
 
     // Handle account changes (email/password) if provided
     if let Some(account_changes) = &body.account_changes {
@@ -595,13 +595,6 @@ pub async fn change_password(
     body: web::Json<PasswordChangeRequest>,
     state: web::Data<AppState>,
 ) -> Result<HttpResponse> {
-    if let Err(validation_errors) = body.validate() {
-        return Ok(HttpResponse::BadRequest().json(ErrorResponse {
-            success: false,
-            error: collect_validation_errors(&validation_errors),
-        }));
-    }
-
     let claims = match state.auth.extract_claims(&req).await {
         Ok(c) => c,
         Err(_) => {
@@ -611,6 +604,13 @@ pub async fn change_password(
             }));
         }
     };
+
+    if let Err(validation_errors) = body.validate() {
+        return Ok(HttpResponse::BadRequest().json(ErrorResponse {
+            success: false,
+            error: collect_validation_errors(&validation_errors),
+        }));
+    }
 
     let oid = match parse_object_id(&claims.user_id) {
         Ok(oid) => oid,
@@ -844,13 +844,6 @@ pub async fn admin_update_user(
     body: web::Json<AdminUserUpdateRequest>,
     state: web::Data<AppState>,
 ) -> Result<HttpResponse> {
-    if let Err(validation_errors) = body.validate() {
-        return Ok(HttpResponse::BadRequest().json(ErrorResponse {
-            success: false,
-            error: collect_validation_errors(&validation_errors),
-        }));
-    }
-
     let claims = match state.auth.extract_claims(&req).await {
         Ok(c) => c,
         Err(_) => {
@@ -860,6 +853,13 @@ pub async fn admin_update_user(
             }));
         }
     };
+
+    if let Err(validation_errors) = body.validate() {
+        return Ok(HttpResponse::BadRequest().json(ErrorResponse {
+            success: false,
+            error: collect_validation_errors(&validation_errors),
+        }));
+    }
 
     if !is_admin(&claims.role, &claims.role_type) {
         return Ok(HttpResponse::Forbidden().json(ErrorResponse {
@@ -979,13 +979,6 @@ pub async fn update_user_role(
     body: web::Json<RoleUpdateRequest>,
     state: web::Data<AppState>,
 ) -> Result<HttpResponse> {
-    if let Err(validation_errors) = body.validate() {
-        return Ok(HttpResponse::BadRequest().json(ErrorResponse {
-            success: false,
-            error: collect_validation_errors(&validation_errors),
-        }));
-    }
-
     let claims = match state.auth.extract_claims(&req).await {
         Ok(c) => c,
         Err(_) => {
@@ -995,6 +988,13 @@ pub async fn update_user_role(
             }));
         }
     };
+
+    if let Err(validation_errors) = body.validate() {
+        return Ok(HttpResponse::BadRequest().json(ErrorResponse {
+            success: false,
+            error: collect_validation_errors(&validation_errors),
+        }));
+    }
 
     if !is_admin(&claims.role, &claims.role_type) {
         return Ok(HttpResponse::Forbidden().json(ErrorResponse {

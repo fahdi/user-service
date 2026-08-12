@@ -127,3 +127,43 @@ pub async fn health(state: actix_web::web::Data<crate::traits::AppState>) -> Res
         Ok(HttpResponse::ServiceUnavailable().json(body))
     }
 }
+
+/// The production route table, defined in exactly one place.
+///
+/// It used to be built inline in `main.rs`, where nothing could mount it: the
+/// tests rebuilt fragments route by route, so they only covered the routes
+/// someone remembered to write a test for (#44).
+///
+/// Authentication here is a per-handler convention rather than a middleware -
+/// each handler calls `state.auth.extract_claims(&req)`. Sharing the table is
+/// what lets a test mount all of it with a rejecting extractor and require
+/// every protected route to answer 401, so a handler that forgets fails on the
+/// day it is written.
+///
+/// `/health` sits outside that convention deliberately: the container probe
+/// sends no credentials (#42).
+pub fn configure_routes(cfg: &mut actix_web::web::ServiceConfig) {
+    use actix_web::web;
+    use handlers::di_handlers::*;
+
+    cfg.route("/health", web::get().to(health))
+        .service(
+            web::scope("/api/users")
+                .route("/profile", web::get().to(get_profile))
+                .route("/profile-picture", web::post().to(update_profile_picture))
+                .route("/avatar", web::delete().to(delete_avatar))
+                .route("/settings", web::get().to(get_settings))
+                .route("/settings", web::put().to(update_settings))
+                .route("/change-password", web::post().to(change_password))
+                .route("/roles", web::get().to(get_user_roles))
+                .route("/roles", web::put().to(update_user_role))
+                .route("/activity", web::get().to(get_user_activity))
+                .route("/export", web::get().to(export_user_data))
+                .route("/import", web::post().to(import_user_data)),
+        )
+        .service(
+            web::scope("/api/admin/users")
+                .route("", web::get().to(admin_search_users))
+                .route("/{id}", web::put().to(admin_update_user)),
+        );
+}

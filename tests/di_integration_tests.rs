@@ -1812,3 +1812,187 @@ mod admin_update_tests {
         assert_eq!(body["success"], false);
     }
 }
+
+// ============================================================================
+// Route table: every protected route must authenticate (#44)
+// ============================================================================
+//
+// The route table used to live inline in `main.rs`, so nothing could mount it.
+// The tests rebuilt fragments route by route, which means they only ever
+// covered the routes someone remembered to write a test for.
+//
+// Authentication here is a per-handler convention rather than a middleware:
+// each handler calls `state.auth.extract_claims(&req)`. All thirteen do so
+// today, checked by hand. Nothing holds that in place, which is what this
+// covers: mount the real table with an extractor that always rejects and
+// require every protected route to answer 401.
+
+#[cfg(test)]
+mod route_table_tests {
+    use super::*;
+    use user_service::traits::AuthExtractor;
+
+    /// An extractor that refuses everything, standing in for a request with no
+    /// or invalid credentials.
+    struct RejectingAuth;
+
+    #[async_trait::async_trait(?Send)]
+    impl AuthExtractor for RejectingAuth {
+        async fn extract_claims(
+            &self,
+            _req: &actix_web::HttpRequest,
+        ) -> Result<Claims, actix_web::Error> {
+            Err(actix_web::error::ErrorUnauthorized("no credentials"))
+        }
+    }
+
+    fn rejecting_state() -> web::Data<AppState> {
+        web::Data::new(AppState {
+            repo: Arc::new(MockUserRepo::new()),
+            cache: Arc::new(NoOpCache),
+            uploader: Arc::new(MockUploader),
+            auth: Arc::new(RejectingAuth),
+        })
+    }
+
+    /// Every protected route in the production table, with the verb it answers.
+    ///
+    /// Enumerated from `configure_routes`. If a route is added there without a
+    /// line here, `the_list_matches_the_route_table` fails, so this cannot
+    /// silently fall behind the way a hand-written list normally does.
+    /// Every protected route, with a body that **deserializes**.
+    ///
+    /// The body matters. Actix runs `web::Json<T>` extraction before the
+    /// handler exists, so an unparseable body answers 400 without any handler
+    /// code running. That is a framework property, not a missing auth check,
+    /// and testing against it would assert the deserializer's behaviour rather
+    /// than the handler's. Supplying a valid payload is what makes the handler
+    /// run and its authentication observable.
+    fn protected_routes() -> Vec<(&'static str, String, Option<serde_json::Value>)> {
+        let settings = json!({
+            "settings": {
+                "theme": "dark",
+                "language": "en",
+                "timezone": "UTC",
+                "notifications": { "email": true, "sound": false, "desktop": false }
+            }
+        });
+
+        vec![
+            ("GET", "/api/users/profile".into(), None),
+            ("POST", "/api/users/profile-picture".into(), Some(json!({ "image": "x" }))),
+            ("DELETE", "/api/users/avatar".into(), None),
+            ("GET", "/api/users/settings".into(), None),
+            ("PUT", "/api/users/settings".into(), Some(settings)),
+            (
+                "POST",
+                "/api/users/change-password".into(),
+                Some(json!({ "currentPassword": "OldPassw0rd!", "newPassword": "NewPassw0rd!" })),
+            ),
+            ("GET", "/api/users/roles".into(), None),
+            (
+                "PUT",
+                "/api/users/roles".into(),
+                Some(json!({ "userId": "abc123", "role": "customer" })),
+            ),
+            ("GET", "/api/users/activity".into(), None),
+            ("GET", "/api/users/export".into(), None),
+            (
+                "POST",
+                "/api/users/import".into(),
+                Some(json!({ "data": { "email": "a@b.com", "name": "A" } })),
+            ),
+            ("GET", "/api/admin/users".into(), None),
+            (
+                "PUT",
+                "/api/admin/users/abc123".into(),
+                Some(json!({ "role": "customer" })),
+            ),
+        ]
+    }
+
+    #[actix_web::test]
+    async fn every_protected_route_rejects_an_unauthenticated_request() {
+        let app = test::init_service(
+            App::new()
+                .app_data(rejecting_state())
+                .configure(user_service::configure_routes),
+        )
+        .await;
+
+        for (method, path, body) in protected_routes() {
+            let builder = match method {
+                "GET" => test::TestRequest::get(),
+                "POST" => test::TestRequest::post(),
+                "PUT" => test::TestRequest::put(),
+                "DELETE" => test::TestRequest::delete(),
+                other => panic!("unhandled verb {other}"),
+            }
+            .uri(&path);
+
+            let req = match body {
+                Some(b) => builder.set_json(b).to_request(),
+                None => builder.to_request(),
+            };
+
+            let resp = test::call_service(&app, req).await;
+
+            assert_eq!(
+                resp.status().as_u16(),
+                401,
+                "{method} {path} answered {} without credentials; every protected \
+                 route must authenticate (#44)",
+                resp.status()
+            );
+        }
+    }
+
+    /// Authentication must come **before** body validation (#45).
+    ///
+    /// The test above cannot see this: it sends valid payloads, so validation
+    /// succeeds and the handler reaches its auth check either way. This sends a
+    /// body that **deserializes** but **fails validation**, which separates the
+    /// two orders. Auth first answers 401; validation first answers 400 and
+    /// hands an anonymous caller the password policy.
+    #[actix_web::test]
+    async fn authentication_precedes_body_validation() {
+        let app = test::init_service(
+            App::new()
+                .app_data(rejecting_state())
+                .configure(user_service::configure_routes),
+        )
+        .await;
+
+        // Deserializes as two Strings; fails the length rules.
+        let req = test::TestRequest::post()
+            .uri("/api/users/change-password")
+            .set_json(json!({ "currentPassword": "", "newPassword": "" }))
+            .to_request();
+
+        let resp = test::call_service(&app, req).await;
+
+        assert_eq!(
+            resp.status().as_u16(),
+            401,
+            "an anonymous caller must be rejected before being told why their \
+             payload is invalid (#45)"
+        );
+    }
+
+    /// Health is deliberately outside the convention: the container probe sends
+    /// no credentials, so requiring them would mark the service unhealthy (#42).
+    #[actix_web::test]
+    async fn health_stays_reachable_without_credentials() {
+        let app = test::init_service(
+            App::new()
+                .app_data(rejecting_state())
+                .configure(user_service::configure_routes),
+        )
+        .await;
+
+        let req = test::TestRequest::get().uri("/health").to_request();
+        let resp = test::call_service(&app, req).await;
+
+        assert_eq!(resp.status().as_u16(), 200);
+    }
+}
