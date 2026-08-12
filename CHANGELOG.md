@@ -1,4 +1,9 @@
 ## 2026-08-11 - Chore: four unused dependencies removed; tokio moved to dev-dependencies (#31)
+## 2026-08-12 - Docs: correct a stale test count in CLAUDE.md
+
+### Fixed
+- `CLAUDE.md` claimed **345 tests**; the suite actually runs **418**. Found while checking every service's documented count against reality after super#178 - **every count checked in this monorepo was wrong**, by as much as 4.6x in messages-chat.
+- A hardcoded count is a claim that changes on almost every PR, so it rots by default. The root `CLAUDE.md` already handles this by quoting approximate totals and deferring exact numbers to CI; that convention is the durable fix, and this is the interim correction.
 ## 2026-08-12 - Build from the committed lockfile (infra#49)
 
 ### Changed

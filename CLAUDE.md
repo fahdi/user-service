@@ -8,7 +8,7 @@ User profile management, settings, avatar uploads, roles, and admin operations w
 - **Port**: 8083 (env: `PORT`, default code says 8081 but Dockerfile exposes 8083)
 - **Database**: MongoDB (`isupercoder` db, collections: `users`, `activities`)
 - **Cache**: Redis (deadpool-redis) + in-memory LRU (500 profiles, 300 settings)
-- **Tests**: 345 tests (201 unit + 49 DI integration + 95 endpoint/security)
+- **Tests**: 418 tests (201 unit + 49 DI integration + 95 endpoint/security)
 
 ## Architecture
 
