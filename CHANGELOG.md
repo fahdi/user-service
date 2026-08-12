@@ -1,4 +1,10 @@
 ## 2026-08-11 - Chore: four unused dependencies removed; tokio moved to dev-dependencies (#31)
+## 2026-08-12 - Remove the never-imported `hex` dependency (#37)
+
+### Removed
+- `hex` was declared in `Cargo.toml` with no `use` or path reference anywhere in `src/` or `tests/`. It was compiled into every build and shipped in the binary, and was dependency surface to audit and patch, for zero functionality.
+- Found by sweeping every declared dependency for whether it is ever imported - a check that has now found unused crates in four services, and caught two larger problems on the way: system-monitoring#36, where a time-series client sat beside documentation claiming metrics were stored in it while nothing ever wrote a sample, and system-monitoring#38, where a `prometheus` crate sat unused beside a working hand-rolled exporter.
+- Proven unused: the build compiles and the suite reports **423 tests before and after**, identical - stronger evidence than "it still builds", since it also rules out silently dropping a test.
 ## 2026-08-12 - Security: reject an empty or short JWT_SECRET (infra#55)
 
 ### Security

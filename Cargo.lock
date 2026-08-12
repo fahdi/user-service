@@ -3609,7 +3609,6 @@ dependencies = [
  "deadpool-redis",
  "env_logger",
  "futures-util",
- "hex",
  "image",
  "jsonwebtoken",
  "lazy_static",
