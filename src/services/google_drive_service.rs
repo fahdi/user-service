@@ -109,6 +109,31 @@ pub async fn upload_profile_picture(
 }
 
 // Create profile folder structure in Google Drive
+/// Fail on a non-success status, naming it.
+///
+/// Three calls in this module previously parsed the body straight to JSON and
+/// inferred failure from a missing field. That reads a *rejection* as a
+/// *shape*: it worked by accident where the expected field happened to be
+/// absent from error bodies, and not at all where the code was looking for
+/// something an error body might still lack (#55).
+///
+/// The search case was the worst of the three. An error body has no `files`
+/// key, so a throttled search looked exactly like a search that found nothing,
+/// and control fell through to creating a duplicate folder.
+/// Returns `String` rather than the module's boxed error because this is held
+/// across an await: `Box<dyn Error>` is not `Send`, and `upload_profile_picture`
+/// is behind an `#[async_trait]` that requires the future to be.
+async fn ensure_success(response: reqwest::Response, what: &str) -> Result<reqwest::Response, String> {
+    let status = response.status();
+    if status.is_success() {
+        return Ok(response);
+    }
+
+    let body = response.text().await.unwrap_or_default();
+    log::error!("Drive rejected {}: status={} body={}", what, status, body);
+    Err(format!("Drive rejected {}: {}", what, status))
+}
+
 async fn create_profile_folder(
     user_id: &str,
     user_email: &str,
@@ -129,6 +154,17 @@ async fn create_profile_folder(
         .send()
         .await?;
 
+    // Checked before parsing. Without this a 429 fell through to the create
+    // branch below, because an error body has no `files` key and so looked
+    // identical to an empty result (#55).
+    // Split deliberately. Chaining `?` onto the `map_err` keeps a
+    // `Box<dyn Error>` alive across the `.json().await` below, and that box is
+    // not `Send`, which breaks the `#[async_trait]` bound on
+    // `upload_profile_picture`. Returning immediately keeps it off the future.
+    let response = match ensure_success(response, "the folder search").await {
+        Ok(response) => response,
+        Err(e) => return Err(e.into()),
+    };
     let search_result: Value = response.json().await?;
 
     // If folder exists, return its ID
@@ -155,13 +191,21 @@ async fn create_profile_folder(
         .send()
         .await?;
 
+    // Split deliberately. Chaining `?` onto the `map_err` keeps a
+    // `Box<dyn Error>` alive across the `.json().await` below, and that box is
+    // not `Send`, which breaks the `#[async_trait]` bound on
+    // `upload_profile_picture`. Returning immediately keeps it off the future.
+    let response = match ensure_success(response, "the folder creation").await {
+        Ok(response) => response,
+        Err(e) => return Err(e.into()),
+    };
     let result: Value = response.json().await?;
 
     result
         .get("id")
         .and_then(|id| id.as_str())
         .map(|s| s.to_string())
-        .ok_or_else(|| "Failed to create Google Drive folder".into())
+        .ok_or_else(|| "Drive accepted the folder creation but returned no id".into())
 }
 
 // Upload file to Google Drive
@@ -194,13 +238,21 @@ async fn upload_to_drive(
         .send()
         .await?;
 
+    // Split deliberately. Chaining `?` onto the `map_err` keeps a
+    // `Box<dyn Error>` alive across the `.json().await` below, and that box is
+    // not `Send`, which breaks the `#[async_trait]` bound on
+    // `upload_profile_picture`. Returning immediately keeps it off the future.
+    let response = match ensure_success(response, "the file upload").await {
+        Ok(response) => response,
+        Err(e) => return Err(e.into()),
+    };
     let result: Value = response.json().await?;
 
     result
         .get("id")
         .and_then(|id| id.as_str())
         .map(|s| s.to_string())
-        .ok_or_else(|| "Failed to upload file to Google Drive".into())
+        .ok_or_else(|| "Drive accepted the upload but returned no id".into())
 }
 
 // Make file publicly accessible
@@ -302,6 +354,110 @@ mod bounded_drive_calls {
             elapsed < Duration::from_secs(30),
             "took {elapsed:?}; the Drive metadata call is not bounded"
         );
+    }
+
+    /// A throttled search must not be read as "no folder exists".
+    ///
+    /// The search response is parsed straight to JSON and probed for a `files`
+    /// array. An error body (`{"error": {...}}`) has no such key, so the
+    /// `if let` did not match and control fell through to the create branch:
+    /// a failed search was indistinguishable from an empty one.
+    ///
+    /// Drive rate-limits, so 429 is the likely case. Each throttled search
+    /// created another `profile_photos_{user_id}` folder, since Drive permits
+    /// duplicate names, scattering the user's avatars (#55).
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn a_throttled_search_does_not_create_a_duplicate_folder() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/drive/v3/files"))
+            .respond_with(ResponseTemplate::new(429).set_body_json(serde_json::json!({
+                "error": { "code": 429, "message": "Rate Limit Exceeded" }
+            })))
+            .mount(&server)
+            .await;
+        // Deliberately mounted: if the fix works this is never called, and
+        // that is the whole point. Without it a fall-through would silently
+        // succeed here and the test would pass on the broken code.
+        Mock::given(method("POST"))
+            .and(path("/drive/v3/files"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({ "id": "duplicate-folder" })),
+            )
+            .mount(&server)
+            .await;
+
+        let _guard = DRIVE_ENV_MUTEX.lock().await;
+        std::env::set_var("GOOGLE_DRIVE_API_BASE_URL", server.uri());
+
+        let result = create_profile_folder("u-1", "a@b.c", "token").await;
+
+        std::env::remove_var("GOOGLE_DRIVE_API_BASE_URL");
+
+        assert!(
+            result.is_err(),
+            "a throttled search must fail, not fall through to creating a \
+             second folder; got {result:?}"
+        );
+    }
+
+    /// An empty result set is a real answer and must still create a folder.
+    ///
+    /// The fix must distinguish "the search worked and found nothing" from
+    /// "the search did not work", not conflate them in the other direction.
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn an_empty_search_still_creates_the_folder() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/drive/v3/files"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({ "files": [] })),
+            )
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/drive/v3/files"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({ "id": "new-folder" })),
+            )
+            .mount(&server)
+            .await;
+
+        let _guard = DRIVE_ENV_MUTEX.lock().await;
+        std::env::set_var("GOOGLE_DRIVE_API_BASE_URL", server.uri());
+
+        let result = create_profile_folder("u-2", "a@b.c", "token").await;
+
+        std::env::remove_var("GOOGLE_DRIVE_API_BASE_URL");
+
+        assert_eq!(result.expect("an empty search is a valid answer"), "new-folder");
+    }
+
+    /// And an existing folder is still reused rather than duplicated.
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn an_existing_folder_is_reused() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/drive/v3/files"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(
+                serde_json::json!({ "files": [{ "id": "existing-folder" }] }),
+            ))
+            .mount(&server)
+            .await;
+
+        let _guard = DRIVE_ENV_MUTEX.lock().await;
+        std::env::set_var("GOOGLE_DRIVE_API_BASE_URL", server.uri());
+
+        let result = create_profile_folder("u-3", "a@b.c", "token").await;
+
+        std::env::remove_var("GOOGLE_DRIVE_API_BASE_URL");
+
+        assert_eq!(result.expect("an existing folder must be reused"), "existing-folder");
     }
 
     /// A rejected sharing request must not report success.

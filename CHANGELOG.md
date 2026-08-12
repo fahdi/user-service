@@ -17,6 +17,24 @@
 - Re-swept the fleet afterwards: **no service now places raw error text in a response body.**
 - 431 tests pass, clippy clean.
 
+## 2026-08-12 - A throttled Drive search created duplicate folders (#55)
+
+### Fixed
+- `create_profile_folder` searched Drive for an existing folder, parsed the response straight to JSON, and probed for a `files` array. An error body (`{"error": {...}}`) has no `files` key, so the `if let` did not match and control fell through to the create branch.
+- **A search that failed was indistinguishable from a search that found nothing.** Drive rate-limits, so 429 is the likely case: each throttled search created another `profile_photos_{user_id}` folder, since Drive permits duplicate names, scattering the user's avatars. Nothing reported it, because from the code's point of view the search simply returned no results.
+- Same shape as infra#62 and #66: a check that cannot see its subject concludes the subject is fine rather than that it could not tell.
+
+### Also fixed
+- The folder-create and upload calls inferred failure from a missing `id` field. That did fail, so it was not a correctness bug, but the message was identical whether Drive returned 403, 401, 429 or a 200 with an unexpected shape. All three calls now go through `ensure_success`, which names the status and logs the body.
+- These were the only two remaining sends in the fleet whose status was never inspected; all 8 services were swept.
+
+### A Send constraint shaped the implementation
+- `ensure_success` returns `String` rather than the module's `Box<dyn Error>`, and its callers `match` instead of chaining `?`. Chaining keeps a `Box<dyn Error>` alive across the following `.json().await`, and that box is not `Send`, which breaks the `#[async_trait]` bound on `upload_profile_picture`.
+
+### Tests
+- `a_throttled_search_does_not_create_a_duplicate_folder`: a 429 on the search must error. The create endpoint is deliberately mocked to succeed, so a fall-through would silently pass; the test fails with the search check removed.
+- `an_empty_search_still_creates_the_folder` and `an_existing_folder_is_reused`: the two legitimate outcomes still work, so the fix distinguishes "found nothing" from "could not tell" rather than conflating them in the other direction.
+
 ## 2026-08-12 - A rejected sharing request reported success (#53)
 
 ### Fixed
