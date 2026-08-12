@@ -1,4 +1,19 @@
 ## 2026-08-11 - Chore: four unused dependencies removed; tokio moved to dev-dependencies (#31)
+## 2026-08-12 - Report Redis failures instead of discarding them (#39)
+
+### Fixed
+- A Redis failure in this service was invisible. `services/cache_service.rs` contains **zero** log calls across all six of its functions, and all four fallible calls were discarded at the adapter in `impls.rs`.
+- **The discard is forced, not casual**, which is why the adapter is the right place to fix it: the trait methods return `()`, so the caching layer is deliberately infallible - a cache problem must not fail a user's profile update. The adapter cannot propagate the error, so it is the exact point where it dies and the only place it can be observed.
+- The two failure modes are now distinguished, because only one matters. A failed **write** is benign - the entry is not cached, the next read misses and hits MongoDB, still correct. A failed **invalidation** leaves the stale entry, so a user keeps seeing their old name or avatar until the TTL expires; that warning says so explicitly.
+- Same defect as projects-api#43, reached from the other direction. There the file logged failed writes while silencing invalidations - an internal contradiction that made it visible. Here the silence was **uniform**, which made it easier to miss and no less costly. Consistency is not evidence of correctness; it just removes the tell.
+- Control flow is unchanged and the trait stays infallible, asserted by a test. Changing either would let a cache outage fail user updates, which is worse than serving a stale profile.
+
+### Added
+- Three tests: the `Ok` path stays silent, a failure does not propagate, and no cache result is discarded without logging. The last searches the source and **builds its needle at runtime** - a literal would appear in the file being searched and pass on its own text, a trap that has bitten four times in this repo and always fails open. Mutation-verified: reintroducing a discarded call fails it.
+- 426 tests pass.
+
+### Note
+- `cargo clippy` reports a pre-existing future-incompatibility warning for `redis v0.25.4`, unrelated to this change. It also **corrects a claim I made in #35**, where I stated 0.25.4 carried no such warning; it does, so that upgrade has a compiler deadline after all. Corrected on that issue.
 ## 2026-08-12 - Remove the never-imported `hex` dependency (#37)
 
 ### Removed
