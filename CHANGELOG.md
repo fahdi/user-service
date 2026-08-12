@@ -17,6 +17,22 @@
 - Re-swept the fleet afterwards: **no service now places raw error text in a response body.**
 - 431 tests pass, clippy clean.
 
+## 2026-08-12 - The local-validation fallback could not run when auth-service hung (#49)
+
+### Fixed
+- `verify_with_auth_service` built its client with `reqwest::Client::new()`, which sets no timeout at all. It now uses a 5 second bound.
+
+### Why this was more than a slow request
+- `validate_bearer_with` validates against auth-service first (it holds the blacklist) and falls back to local validation only on transport-level unavailability. `RemoteValidation::Unavailable` is produced only when `send()` returns an error.
+- `unavailable_auth_service_falls_back_to_local` points at a dead port, so it covered connection-refused, which errors immediately. That is the easy outage. It did not cover auth-service accepting the connection and never answering, which is what a GC stall, a lock, or an exhausted Mongo pool looks like. There `send()` never returned, `Unavailable` was never produced, and the fallback that exists to preserve availability was unreachable in the failure it was bought for.
+
+### Test
+- `a_hung_auth_service_falls_back_within_a_bound` uses a wiremock server delaying 60 seconds and asserts both the result and the elapsed time. Before the fix it ran 60.24 seconds; after, 5.25. The elapsed bound is what gives the test meaning: asserting on the result alone passes either way, since the unbounded call does eventually return.
+- All 7 tests in `blacklist_honoring_spec` pass, so rejection stays final.
+
+### Fleet
+- Same defect as messages-chat#51, projects-api#54 and file-management#52. Two remain: notifications#75 and system-monitoring#49.
+
 ## 2026-08-12 - One route table, and authentication now precedes validation (#44, #45)
 
 ### Added
