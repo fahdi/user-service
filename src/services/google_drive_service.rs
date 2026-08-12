@@ -4,6 +4,58 @@ use serde_json::Value;
 use std::env;
 use std::io::Cursor;
 
+use std::time::Duration;
+
+/// Bound on establishing a connection to Drive. Independent of payload size.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Total bound for the metadata calls (folder lookup, folder create, sharing).
+///
+/// These carry a small JSON request and response, so there is no long
+/// legitimate case for a total bound to accommodate.
+const METADATA_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Total bound for the picture upload.
+///
+/// `reqwest::Client::timeout` covers body transfer, and this sends the whole
+/// picture in one multipart body. `di_handlers.rs` caps that at 5 MiB, so at
+/// 60s the slowest tolerated throughput is roughly 85 KB/s, far below any
+/// usable connection. Copying `METADATA_TIMEOUT` here would abort real uploads
+/// on slow links, which is the trap identified in file-management#54.
+const UPLOAD_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// Base URL for the Drive API, overridable so the calls can be tested.
+///
+/// The endpoints were hardcoded to googleapis.com, which left this module with
+/// no test seam at all and, not coincidentally, zero tests (#51). Same approach
+/// as `brevo_api_base_url` in auth-service.
+fn drive_api_base() -> String {
+    std::env::var("GOOGLE_DRIVE_API_BASE_URL")
+        .unwrap_or_else(|_| "https://www.googleapis.com".to_string())
+}
+
+/// A client for the small metadata calls.
+fn metadata_client() -> Result<reqwest::Client, reqwest::Error> {
+    reqwest::Client::builder()
+        .connect_timeout(CONNECT_TIMEOUT)
+        .timeout(METADATA_TIMEOUT)
+        .build()
+}
+
+/// A client for the picture upload, with room for the body.
+///
+/// `connect_timeout` alone is not sufficient: a server that completes the
+/// handshake and then never answers leaves an established, idle socket, which
+/// the kernel does not treat as an error short of TCP keepalive. Verified by
+/// mutation in file-management#54.
+fn upload_client() -> Result<reqwest::Client, reqwest::Error> {
+    reqwest::Client::builder()
+        .connect_timeout(CONNECT_TIMEOUT)
+        .timeout(UPLOAD_TIMEOUT)
+        .build()
+}
+
+
 // Upload profile picture to Google Drive (matches Node.js implementation exactly)
 pub async fn upload_profile_picture(
     user_id: &str,
@@ -68,9 +120,10 @@ async fn create_profile_folder(
         user_id
     );
 
-    let client = reqwest::Client::new();
+    let client = metadata_client()?;
+    let api_base = drive_api_base();
     let response = client
-        .get("https://www.googleapis.com/drive/v3/files")
+        .get(format!("{}/drive/v3/files", api_base))
         .bearer_auth(access_token)
         .query(&[("q", &search_query)])
         .send()
@@ -95,7 +148,7 @@ async fn create_profile_folder(
     });
 
     let response = client
-        .post("https://www.googleapis.com/drive/v3/files")
+        .post(format!("{}/drive/v3/files", api_base))
         .bearer_auth(access_token)
         .header("Content-Type", "application/json")
         .json(&folder_metadata)
@@ -130,9 +183,12 @@ async fn upload_to_drive(
             .mime_str("image/jpeg")?,
     );
 
-    let client = reqwest::Client::new();
+    let client = upload_client()?;
     let response = client
-        .post("https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart")
+        .post(format!(
+            "{}/upload/drive/v3/files?uploadType=multipart",
+            drive_api_base()
+        ))
         .bearer_auth(access_token)
         .multipart(form)
         .send()
@@ -157,10 +213,11 @@ async fn make_file_public(
         "type": "anyone"
     });
 
-    let client = reqwest::Client::new();
+    let client = metadata_client()?;
     let _response = client
         .post(format!(
-            "https://www.googleapis.com/drive/v3/files/{}/permissions",
+            "{}/drive/v3/files/{}/permissions",
+            drive_api_base(),
             file_id
         ))
         .bearer_auth(access_token)
@@ -170,4 +227,97 @@ async fn make_file_public(
         .await?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod bounded_drive_calls {
+    use super::*;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    // `GOOGLE_DRIVE_API_BASE_URL` is process-global, so these serialize
+    // against each other the way auth-service's Brevo tests do.
+    lazy_static::lazy_static! {
+        static ref DRIVE_ENV_MUTEX: tokio::sync::Mutex<()> = tokio::sync::Mutex::new(());
+    }
+
+    /// A stalled Drive must not hold the avatar request open.
+    ///
+    /// Stalls the first leg (the folder lookup), which is what an upload hits
+    /// first, so this pins the property that actually matters to a caller:
+    /// `POST /api/users/profile-picture` cannot hang indefinitely.
+    ///
+    /// A server that completes the handshake and then never answers leaves an
+    /// established, idle socket. The kernel does not treat that as an error
+    /// short of TCP keepalive, two hours away on Linux by default (#51).
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn a_stalled_drive_gives_up_instead_of_holding_the_request() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/drive/v3/files"))
+            .respond_with(
+                // Stands in for "accepts the connection, never answers".
+                ResponseTemplate::new(200).set_delay(Duration::from_secs(60)),
+            )
+            .mount(&server)
+            .await;
+
+        let _guard = DRIVE_ENV_MUTEX.lock().await;
+        std::env::set_var("GOOGLE_DRIVE_API_BASE_URL", server.uri());
+
+        let started = std::time::Instant::now();
+        let result = create_profile_folder("token", "u-1", "a@b.c").await;
+        let elapsed = started.elapsed();
+
+        std::env::remove_var("GOOGLE_DRIVE_API_BASE_URL");
+
+        assert!(result.is_err(), "a stalled Drive cannot have succeeded");
+
+        // The bound is the test. The call fails either way once the endpoint
+        // finally answers; without a timeout it takes the full delay.
+        assert!(
+            elapsed < Duration::from_secs(30),
+            "took {elapsed:?}; the Drive metadata call is not bounded"
+        );
+    }
+
+    /// The upload bound must not be so tight that it breaks a real avatar.
+    ///
+    /// `di_handlers.rs` caps uploads at 5 MiB and `reqwest::Client::timeout`
+    /// covers body transfer, so a value chosen only to stop hangs would abort
+    /// legitimate uploads. This sends a full-size picture through
+    /// `upload_client()` and pins that it still completes.
+    ///
+    /// The upload leg's own stall behaviour is not asserted here: its bound is
+    /// 60s, so stalling it would mean a minute-long test. The metadata test
+    /// above covers the request-path-cannot-hang property, and this covers the
+    /// opposite direction, that the bound leaves room for the real payload.
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn a_full_size_avatar_still_uploads_under_the_bound() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/upload/drive/v3/files"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({ "id": "uploaded-avatar" })),
+            )
+            .mount(&server)
+            .await;
+
+        let _guard = DRIVE_ENV_MUTEX.lock().await;
+        std::env::set_var("GOOGLE_DRIVE_API_BASE_URL", server.uri());
+
+        // The maximum the handler accepts.
+        let picture = vec![0u8; 5 * 1024 * 1024];
+        let result = upload_to_drive("token", picture, "avatar.jpg", "folder-1").await;
+
+        std::env::remove_var("GOOGLE_DRIVE_API_BASE_URL");
+
+        assert_eq!(
+            result.expect("the bound must not break a full-size avatar upload"),
+            "uploaded-avatar"
+        );
+    }
 }
