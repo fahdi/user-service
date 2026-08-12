@@ -32,8 +32,8 @@ mongodb = "2.8"
 bson = "2.9"
 
 # Caching
-redis = "0.25"
-deadpool-redis = "0.15"
+redis = "0.27"
+deadpool-redis = "0.18"
 lru = "0.12"
 
 # Authentication
