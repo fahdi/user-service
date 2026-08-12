@@ -67,6 +67,14 @@ fn warn_if_cache_failed<E: std::fmt::Display>(
 
 #[async_trait]
 impl UserRepository for MongoUserRepository {
+    async fn health_check(&self) -> RepoResult<()> {
+        let db = self.get_db().await?;
+        db.run_command(mongodb::bson::doc! { "ping": 1 }, None)
+            .await
+            .map_err(|e| RepoError(format!("ping failed: {e}")))?;
+        Ok(())
+    }
+
     async fn find_user(
         &self,
         filter: Document,

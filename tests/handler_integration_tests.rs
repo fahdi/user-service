@@ -241,6 +241,10 @@ impl InMemoryRepo {
 
 #[async_trait]
 impl UserRepository for InMemoryRepo {
+    async fn health_check(&self) -> RepoResult<()> {
+        Ok(())
+    }
+
     async fn find_user(
         &self,
         filter: Document,
