@@ -45,8 +45,31 @@ struct ValidateResponse {
     claims: Option<ValidateClaims>,
 }
 
+/// How long to wait for auth-service before treating it as unavailable.
+///
+/// Matches the bound the rest of the fleet uses for outbound calls. The exact
+/// value matters less than there being one.
+const AUTH_SERVICE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
 async fn verify_with_auth_service(auth_service_url: &str, token: &str) -> RemoteValidation {
-    let client = reqwest::Client::new();
+    // Bounded on purpose. `reqwest::Client::new()` sets no timeout at all, so
+    // an unanswered request fell through to the OS TCP timeout. That made the
+    // `Unavailable` fallback below unreachable when auth-service *hangs* as
+    // opposed to refusing: `send()` never returns, so the arm that preserves
+    // availability never runs (#49).
+    let client = match reqwest::Client::builder()
+        .timeout(AUTH_SERVICE_TIMEOUT)
+        .build()
+    {
+        Ok(client) => client,
+        // Building a client with only a timeout set should not fail. If it
+        // does, that is this service's problem, not a verdict on the token, so
+        // it takes the same path as an unreachable auth-service.
+        Err(e) => {
+            log::error!("Failed to build auth-service client: {}", e);
+            return RemoteValidation::Unavailable;
+        }
+    };
     let response = match client
         .post(format!("{}/api/auth/validate", auth_service_url))
         .header("Authorization", format!("Bearer {}", token))

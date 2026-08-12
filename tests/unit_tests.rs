@@ -786,6 +786,49 @@ mod blacklist_honoring_spec {
             .is_err());
     }
 
+    /// The fallback above must also survive auth-service *hanging*.
+    ///
+    /// `unavailable_auth_service_falls_back_to_local` points at a dead port,
+    /// so it covers connection-refused, which errors immediately. That is the
+    /// easy outage. It does not cover auth-service accepting the connection
+    /// and never answering, which is what a GC stall, a lock, or an exhausted
+    /// Mongo pool actually looks like.
+    ///
+    /// `Unavailable` is only produced when `send()` returns an error, so with
+    /// an unbounded client that case never resolved and every authenticated
+    /// request waited on the OS TCP timeout instead of falling back (#49).
+    #[tokio::test]
+    async fn a_hung_auth_service_falls_back_within_a_bound() {
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .and(wiremock::matchers::path("/api/auth/validate"))
+            .respond_with(
+                // Stands in for "accepts the connection, never answers".
+                wiremock::ResponseTemplate::new(200)
+                    .set_delay(std::time::Duration::from_secs(60)),
+            )
+            .mount(&server)
+            .await;
+
+        let token = local_token("s3cret");
+        let started = std::time::Instant::now();
+        let result = validate_bearer_with(&server.uri(), &token, "s3cret").await;
+        let elapsed = started.elapsed();
+
+        assert!(
+            result.is_ok(),
+            "a hung auth-service must fall back to local validation"
+        );
+
+        // The bound is the test. Asserting on the result alone passes without
+        // the timeout too, because the unbounded call does eventually return;
+        // it just takes the mock's full delay to do it.
+        assert!(
+            elapsed < std::time::Duration::from_secs(15),
+            "took {elapsed:?}; the auth-service call is not bounded"
+        );
+    }
+
     #[tokio::test]
     async fn malformed_valid_without_claims_is_rejected() {
         let server = wiremock::MockServer::start().await;
