@@ -695,8 +695,11 @@ mod security_audit_tests {
     fn test_present_jwt_secret_passes_through() {
         use user_service::middleware::auth::jwt_secret_from;
 
-        let result = jwt_secret_from(Ok("a-configured-secret".to_string()));
-        assert_eq!(result.unwrap(), "a-configured-secret");
+        // Long enough for the production floor (infra#55); the assertion here
+        // is that a usable secret passes through unchanged, not its length.
+        let secret = "a-configured-secret-long-enough-for-the-floor";
+        let result = jwt_secret_from(Ok(secret.to_string()));
+        assert_eq!(result.unwrap(), secret);
     }
 
     // ---- Issue #4: Regex escaping ----

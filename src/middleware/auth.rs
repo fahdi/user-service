@@ -135,13 +135,46 @@ pub async fn validate_bearer_with(
 /// runs inside 13 request handlers, and unwinding there aborts the
 /// connection while /health keeps passing. Takes the env result as input so
 /// tests need no env-var mutation (which races parallel tests).
+/// Shortest secret this service will run with, matching the floor
+/// utilities-forms, auth-service and projects-api enforce.
+pub const MIN_JWT_SECRET_LEN: usize = 32;
+
+/// Resolve the JWT secret, rejecting one that is present but unusable.
+///
+/// This previously mapped only the `Err` arm. That asks whether the variable
+/// is *set*, which is a different question from whether it is *usable*:
+/// `env::var` returns `Ok("")` for a set-but-empty variable, and
+/// `docker-compose.production.yml` uses `JWT_SECRET=${JWT_SECRET}` with no
+/// default, which Compose substitutes as `""` when the host variable is
+/// missing. HMAC-SHA256 with an empty key is valid, so tokens signed with
+/// nothing would have verified (infra#55).
 pub fn jwt_secret_from(
     var: Result<String, std::env::VarError>,
 ) -> Result<String, actix_web::Error> {
-    var.map_err(|_| {
+    let secret = var.map_err(|_| {
         log::error!("JWT_SECRET is not set; rejecting authenticated request");
         actix_web::error::ErrorInternalServerError("Server configuration error")
-    })
+    })?;
+
+    if secret.trim().is_empty() {
+        log::error!("JWT_SECRET is set but empty; rejecting authenticated request");
+        return Err(actix_web::error::ErrorInternalServerError(
+            "Server configuration error",
+        ));
+    }
+
+    if secret.len() < MIN_JWT_SECRET_LEN {
+        log::error!(
+            "JWT_SECRET is {} characters; at least {} are required",
+            secret.len(),
+            MIN_JWT_SECRET_LEN
+        );
+        return Err(actix_web::error::ErrorInternalServerError(
+            "Server configuration error",
+        ));
+    }
+
+    Ok(secret)
 }
 
 // Simple JWT extractor for handlers
@@ -172,6 +205,48 @@ pub async fn extract_claims_from_request(
 mod tests {
     use super::*;
     use jsonwebtoken::{encode, EncodingKey, Header};
+
+    // ── JWT secret usability (infra#55) ─────────────────────────────
+    //
+    // `jwt_secret_from` only mapped the `Err` arm, and `main` gated startup on
+    // `env::var(..).is_err()`. Both ask whether the variable is *set*, which
+    // is a different question from whether it is *usable*: `env::var` returns
+    // `Ok("")` for a set-but-empty variable, and production compose uses
+    // `JWT_SECRET=${JWT_SECRET}` with no default, which Compose substitutes as
+    // `""` when the host variable is missing. HMAC with an empty key is valid,
+    // so tokens signed with nothing would have verified.
+    //
+    // This function already takes the env lookup as a parameter, so these need
+    // no process-environment mutation and no serialisation.
+
+    #[test]
+    fn empty_secret_is_rejected() {
+        assert!(jwt_secret_from(Ok(String::new())).is_err());
+    }
+
+    #[test]
+    fn whitespace_only_secret_is_rejected() {
+        assert!(jwt_secret_from(Ok("   ".to_string())).is_err());
+    }
+
+    #[test]
+    fn short_secret_is_rejected() {
+        let secret = "a".repeat(MIN_JWT_SECRET_LEN - 1);
+        assert!(jwt_secret_from(Ok(secret)).is_err());
+    }
+
+    #[test]
+    fn missing_secret_is_still_rejected() {
+        assert!(jwt_secret_from(Err(std::env::VarError::NotPresent)).is_err());
+    }
+
+    #[test]
+    fn the_deployed_local_dev_secret_is_accepted() {
+        // The value infra/local-dev/docker-compose.dev.yml actually supplies,
+        // so this guard cannot break the environment it ships with.
+        let secret = "local-dev-jwt-secret-isupercoder-2025-not-for-production";
+        assert_eq!(jwt_secret_from(Ok(secret.to_string())).unwrap(), secret);
+    }
 
     /// Regression test: auth-service's real Claims struct also carries `iss`/`aud`
     /// (unlike this service's own `Claims`, which doesn't declare those fields).
