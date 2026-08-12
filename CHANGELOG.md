@@ -1,3 +1,22 @@
+## 2026-08-12 - Stop returning raw database errors to callers (#47)
+
+### Fixed
+- Ten sites in `di_handlers.rs` returned `format!("Database error: {}", e)` in the response body. A rendered `mongodb::error::Error` can carry server hostnames and ports, replica-set names, database and collection names, index names, and in some command failures fragments of the offending document.
+- **user-service was the only service in the fleet doing this.** The other seven return a generic message; projects-api states the pattern explicitly, logging the detail and returning `"Database error occurred"`.
+
+### It was backwards in both directions
+- **None of the ten logged the error.** The detail went to the party who should not have it and not to the party who needs it, so an operator seeing one of these in production had a 500 with no log line while the caller held the only copy of the diagnostic.
+- Each site now logs what it stopped returning. The information moved rather than disappeared, which makes this an observability fix as much as a disclosure one.
+
+### Severity, stated plainly
+- These are authenticated endpoints, so this was never anonymous disclosure. It was disclosure to any logged-in account, and this platform has customer accounts, so "authenticated" is not "trusted". **Moderate, not critical**, and worth doing because it is cheap and matches what every sibling already does.
+
+### Verification
+- RED first, and the failure showed the leak verbatim: `{"success":false,"error":"Database error: mongodb://internal-host:27017 replica-set-alpha"}`.
+- Mutation-verified: restoring a single site fails the test again.
+- Re-swept the fleet afterwards: **no service now places raw error text in a response body.**
+- 431 tests pass, clippy clean.
+
 ## 2026-08-12 - One route table, and authentication now precedes validation (#44, #45)
 
 ### Added

@@ -28,6 +28,8 @@ struct MockUserRepo {
     /// Simulate an unreachable database for `/health` (#42). Its own axis:
     /// a repository can be reachable and still fail a particular query.
     health_fails: Arc<Mutex<bool>>,
+    /// Make every query fail, to exercise the error path (#47).
+    query_error: Arc<Mutex<Option<String>>>,
 }
 
 impl MockUserRepo {
@@ -36,7 +38,15 @@ impl MockUserRepo {
             users: Arc::new(Mutex::new(Vec::new())),
             activities: Arc::new(Mutex::new(Vec::new())),
             health_fails: Arc::new(Mutex::new(false)),
+            query_error: Arc::new(Mutex::new(None)),
         }
+    }
+
+    /// Every query returns this error text, so a test can assert the response
+    /// does not repeat it back to the caller (#47).
+    fn with_query_error(self, msg: &str) -> Self {
+        *self.query_error.lock().unwrap() = Some(msg.to_string());
+        self
     }
 
     fn with_failing_health(self) -> Self {
@@ -88,6 +98,9 @@ impl UserRepository for MockUserRepo {
         filter: Document,
         _projection: Option<Document>,
     ) -> RepoResult<Option<Document>> {
+        if let Some(msg) = self.query_error.lock().unwrap().clone() {
+            return Err(RepoError(msg));
+        }
         let users = self.users.lock().map_err(|e| RepoError(e.to_string()))?;
         Ok(users
             .iter()
@@ -1994,5 +2007,54 @@ mod route_table_tests {
         let resp = test::call_service(&app, req).await;
 
         assert_eq!(resp.status().as_u16(), 200);
+    }
+}
+
+// ============================================================================
+// Internal error text must not reach the client (#47)
+// ============================================================================
+//
+// Ten sites returned `format!("Database error: {}", e)` in the response body,
+// and none of them logged it. The detail went to the party who should not have
+// it and not to the party who needs it. Every other service in the fleet logs
+// the detail and returns a generic message; projects-api states that pattern
+// explicitly in its error mapping.
+
+#[cfg(test)]
+mod error_disclosure_tests {
+    use super::*;
+
+    /// A string that could only appear in the response if the underlying error
+    /// were pasted into it. Deliberately unlike any legitimate message.
+    const SECRET: &str = "mongodb://internal-host:27017 replica-set-alpha";
+
+    #[actix_web::test]
+    async fn a_database_failure_does_not_echo_the_error_to_the_caller() {
+        let repo = MockUserRepo::new().with_query_error(SECRET);
+        let state = make_state(repo);
+
+        let app = test::init_service(
+            App::new()
+                .app_data(state)
+                .configure(user_service::configure_routes),
+        )
+        .await;
+
+        let oid = ObjectId::new();
+        let req = test::TestRequest::get()
+            .uri("/api/users/profile")
+            .insert_header(("authorization", customer_token(&oid)))
+            .to_request();
+
+        let resp = test::call_service(&app, req).await;
+        let status = resp.status().as_u16();
+        let body: serde_json::Value = test::read_body_json(resp).await;
+        let rendered = body.to_string();
+
+        assert_eq!(status, 500, "a repository failure is still a 500");
+        assert!(
+            !rendered.contains(SECRET),
+            "the response repeated the underlying error back to the caller: {rendered}"
+        );
     }
 }

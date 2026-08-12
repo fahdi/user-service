@@ -102,7 +102,13 @@ pub async fn get_profile(
         Err(e) => {
             return Ok(HttpResponse::InternalServerError().json(ErrorResponse {
                 success: false,
-                error: format!("Database error: {}", e),
+                error: {
+                    // The detail goes to the log, not the caller (#47). A rendered
+                    // mongodb error can carry hostnames, replica-set names, database
+                    // and collection names, and fragments of the offending document.
+                    log::error!("Database error: {}", e);
+                    "Database error occurred".to_string()
+                },
             }));
         }
     };
@@ -183,7 +189,13 @@ pub async fn get_settings(req: HttpRequest, state: web::Data<AppState>) -> Resul
         Err(e) => {
             return Ok(HttpResponse::InternalServerError().json(ErrorResponse {
                 success: false,
-                error: format!("Database error: {}", e),
+                error: {
+                    // The detail goes to the log, not the caller (#47). A rendered
+                    // mongodb error can carry hostnames, replica-set names, database
+                    // and collection names, and fragments of the offending document.
+                    log::error!("Database error: {}", e);
+                    "Database error occurred".to_string()
+                },
             }));
         }
     };
@@ -280,7 +292,13 @@ pub async fn update_settings(
             Err(e) => {
                 return Ok(HttpResponse::InternalServerError().json(ErrorResponse {
                     success: false,
-                    error: format!("Database error: {}", e),
+                    error: {
+                        // The detail goes to the log, not the caller (#47). A rendered
+                        // mongodb error can carry hostnames, replica-set names, database
+                        // and collection names, and fragments of the offending document.
+                        log::error!("Database error: {}", e);
+                        "Database error occurred".to_string()
+                    },
                 }));
             }
         };
@@ -397,7 +415,13 @@ pub async fn update_settings(
         Err(e) => {
             return Ok(HttpResponse::InternalServerError().json(ErrorResponse {
                 success: false,
-                error: format!("Failed to update settings: {}", e),
+                error: {
+                    // The detail goes to the log, not the caller (#47). A rendered
+                    // mongodb error can carry hostnames, replica-set names, database
+                    // and collection names, and fragments of the offending document.
+                    log::error!("Failed to update settings: {}", e);
+                    "Failed to update settings".to_string()
+                },
             }));
         }
     }
@@ -502,7 +526,13 @@ pub async fn update_profile_picture(
         Err(e) => {
             return Ok(HttpResponse::InternalServerError().json(ErrorResponse {
                 success: false,
-                error: format!("Database error: {}", e),
+                error: {
+                    // The detail goes to the log, not the caller (#47). A rendered
+                    // mongodb error can carry hostnames, replica-set names, database
+                    // and collection names, and fragments of the offending document.
+                    log::error!("Database error: {}", e);
+                    "Database error occurred".to_string()
+                },
             }));
         }
     };
@@ -634,7 +664,13 @@ pub async fn change_password(
         Err(e) => {
             return Ok(HttpResponse::InternalServerError().json(ErrorResponse {
                 success: false,
-                error: format!("Database error: {}", e),
+                error: {
+                    // The detail goes to the log, not the caller (#47). A rendered
+                    // mongodb error can carry hostnames, replica-set names, database
+                    // and collection names, and fragments of the offending document.
+                    log::error!("Database error: {}", e);
+                    "Database error occurred".to_string()
+                },
             }));
         }
     };
@@ -794,7 +830,13 @@ pub async fn admin_search_users(
         Err(e) => {
             return Ok(HttpResponse::InternalServerError().json(ErrorResponse {
                 success: false,
-                error: format!("Database error: {}", e),
+                error: {
+                    // The detail goes to the log, not the caller (#47). A rendered
+                    // mongodb error can carry hostnames, replica-set names, database
+                    // and collection names, and fragments of the offending document.
+                    log::error!("Database error: {}", e);
+                    "Database error occurred".to_string()
+                },
             }));
         }
     };
@@ -814,7 +856,13 @@ pub async fn admin_search_users(
         Err(e) => {
             return Ok(HttpResponse::InternalServerError().json(ErrorResponse {
                 success: false,
-                error: format!("Search failed: {}", e),
+                error: {
+                    // The detail goes to the log, not the caller (#47). A rendered
+                    // mongodb error can carry hostnames, replica-set names, database
+                    // and collection names, and fragments of the offending document.
+                    log::error!("Search failed: {}", e);
+                    "Search failed".to_string()
+                },
             }));
         }
     };
@@ -1094,7 +1142,13 @@ pub async fn get_user_activity(
         Err(e) => {
             return Ok(HttpResponse::InternalServerError().json(ErrorResponse {
                 success: false,
-                error: format!("Query failed: {}", e),
+                error: {
+                    // The detail goes to the log, not the caller (#47). A rendered
+                    // mongodb error can carry hostnames, replica-set names, database
+                    // and collection names, and fragments of the offending document.
+                    log::error!("Query failed: {}", e);
+                    "Query failed".to_string()
+                },
             }));
         }
     };
@@ -1152,7 +1206,13 @@ pub async fn export_user_data(
         Err(e) => {
             return Ok(HttpResponse::InternalServerError().json(ErrorResponse {
                 success: false,
-                error: format!("Database error: {}", e),
+                error: {
+                    // The detail goes to the log, not the caller (#47). A rendered
+                    // mongodb error can carry hostnames, replica-set names, database
+                    // and collection names, and fragments of the offending document.
+                    log::error!("Database error: {}", e);
+                    "Database error occurred".to_string()
+                },
             }));
         }
     };
