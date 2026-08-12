@@ -17,6 +17,25 @@
 - Re-swept the fleet afterwards: **no service now places raw error text in a response body.**
 - 431 tests pass, clippy clean.
 
+## 2026-08-12 - Three unbounded Drive clients on the avatar upload path (#51)
+
+### Fixed
+- `google_drive_service` built three clients with `reqwest::Client::new()`, none with a timeout: `create_profile_folder` (71), `upload_to_drive` (133) and `make_file_public` (160). All three run in sequence on `POST /api/users/profile-picture`, awaited inline, so one avatar upload carried three independent chances to hang.
+- A server that completes the handshake and then never responds has no OS-level backstop: the socket is established and idle, so the kernel treats it as fine until TCP keepalive, two hours away on Linux by default.
+
+### The three did not want the same bound
+- `reqwest::Client::timeout` is a **total** bound covering body transfer. The upload sends the whole picture in one multipart body and `di_handlers.rs:478` caps that at 5 MiB, so a short total would abort legitimate uploads on slow connections. The other two carry small JSON.
+- Metadata calls: `connect_timeout(10s)` + `timeout(10s)`.
+- Upload: `connect_timeout(10s)` + `timeout(60s)`, which for 5 MiB permits throughput down to roughly 85 KB/s.
+- Different numbers from file-management#54 (120s) for the reason that issue gave: the right total is a function of the largest legitimate body, and 5 MiB is not 8 MiB.
+
+### Added a test seam
+- The four endpoints were hardcoded to `googleapis.com`, so this module had no way to be tested and, not coincidentally, had **zero tests**. `GOOGLE_DRIVE_API_BASE_URL` now overrides the base, matching the `brevo_api_base_url` approach in auth-service.
+
+### Tests
+- `a_stalled_drive_gives_up_instead_of_holding_the_request`: stalls the first leg and asserts elapsed. 10.25s; 60.30s with the bound reverted.
+- `a_full_size_avatar_still_uploads_under_the_bound`: sends the full 5 MiB the handler accepts, so a later tightening that breaks real uploads fails here.
+
 ## 2026-08-12 - The local-validation fallback could not run when auth-service hung (#49)
 
 ### Fixed
