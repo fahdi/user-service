@@ -1,4 +1,17 @@
 ## 2026-08-11 - Chore: four unused dependencies removed; tokio moved to dev-dependencies (#31)
+## 2026-08-12 - Upgrade redis 0.25 to 0.27, clearing the fleet's last future-incompat warning (#35)
+
+### Changed
+- `redis 0.25.4` -> `0.27.6` and `deadpool-redis 0.15` -> `0.18`, bumped **together**. `cargo tree -i redis` shows a single 0.27.6 in the graph - the direct dependency and deadpool's transitive one resolve to the same version.
+- rustc flagged `redis v0.25.4` as code a future compiler will reject. With this, **no service in the fleet carries a future-incompatibility warning** - the other seven were verified clean first.
+
+### Correcting my own assessment
+- I deferred this twice, calling it "a real refactor with its own test surface, not a mechanical fix". **That was wrong, and wrong for an avoidable reason**: the judgement came from an attempt that bumped `redis` alone, leaving `deadpool-redis 0.15` pinning the old version. The resulting `unresolved import redis::AsyncCommands` and `deadpool_redis::Connection` errors were an artefact of the mismatch, not of the upgrade.
+- Bumped as a pair, it is **zero code changes**: the build has no errors, 426 tests pass unchanged, and clippy is clean. An hour of work was deferred twice on evidence produced by doing it incorrectly.
+- This compounds a second error on the same issue, corrected earlier today: I had also claimed 0.25.4 carried no future-incompat warning. Both mistakes pushed the same way - understating the case for acting.
+
+### Removed
+- The exemption for this service in `infra/tests/check-shared-dep-versions.py`, which existed only while this was outstanding.
 ## 2026-08-12 - Report Redis failures instead of discarding them (#39)
 
 ### Fixed
