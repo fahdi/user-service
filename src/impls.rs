@@ -5,6 +5,7 @@
 //! testable with mocks.
 
 use async_trait::async_trait;
+
 use mongodb::bson::Document;
 use std::sync::Arc;
 
@@ -34,6 +35,33 @@ impl MongoUserRepository {
 
     fn activities_collection(&self, db: &mongodb::Database) -> mongodb::Collection<Document> {
         db.collection::<Document>("user_activities")
+    }
+}
+
+/// Log a failed cache operation instead of discarding it.
+///
+/// The discard is forced, not casual: these trait methods return `()`, so the
+/// caching layer is deliberately infallible - a cache problem must not fail a
+/// user's profile update. This adapter is therefore the exact point where the
+/// error dies, and the only place it can be observed.
+///
+/// `stale` distinguishes the two failure modes, because only one of them
+/// matters. A failed write is benign - the entry is not cached, the next read
+/// misses and hits MongoDB, still correct. A failed *invalidation* leaves the
+/// stale entry in place, so a user keeps seeing their old name or avatar until
+/// the TTL expires (#39).
+fn warn_if_cache_failed<E: std::fmt::Display>(
+    result: Result<(), E>,
+    operation: &str,
+    key: &str,
+    stale: bool,
+) {
+    if let Err(e) = result {
+        if stale {
+            log::warn!("cache {operation} failed for {key}: {e} - stale data will be served until the entry expires");
+        } else {
+            log::warn!("cache {operation} failed for {key}: {e} - reads will fall through to the database");
+        }
     }
 }
 
@@ -173,11 +201,21 @@ impl CacheService for RedisCacheService {
     }
 
     async fn cache_profile(&self, key: &str, user: &StandardizedUser, ttl: u64) {
-        let _ = crate::services::cache_service::cache_profile(key, user, ttl).await;
+        warn_if_cache_failed(
+            crate::services::cache_service::cache_profile(key, user, ttl).await,
+            "write",
+            key,
+            false,
+        );
     }
 
     async fn invalidate_profile_cache(&self, key: &str) {
-        let _ = crate::services::cache_service::invalidate_profile_cache(key).await;
+        warn_if_cache_failed(
+            crate::services::cache_service::invalidate_profile_cache(key).await,
+            "profile invalidation",
+            key,
+            true,
+        );
     }
 
     async fn get_cached_settings(&self, key: &str) -> Option<SettingsResponse> {
@@ -185,11 +223,21 @@ impl CacheService for RedisCacheService {
     }
 
     async fn cache_settings(&self, key: &str, settings: &SettingsResponse, ttl: u64) {
-        let _ = crate::services::cache_service::cache_settings(key, settings, ttl).await;
+        warn_if_cache_failed(
+            crate::services::cache_service::cache_settings(key, settings, ttl).await,
+            "write",
+            key,
+            false,
+        );
     }
 
     async fn invalidate_settings_cache(&self, key: &str) {
-        let _ = crate::services::cache_service::invalidate_settings_cache(key).await;
+        warn_if_cache_failed(
+            crate::services::cache_service::invalidate_settings_cache(key).await,
+            "settings invalidation",
+            key,
+            true,
+        );
     }
 }
 
@@ -249,5 +297,40 @@ pub fn build_app_state() -> AppState {
         cache: Arc::new(RedisCacheService),
         uploader: Arc::new(GoogleDriveUploader),
         auth: Arc::new(JwtAuthExtractor),
+    }
+}
+
+#[cfg(test)]
+mod cache_observability_tests {
+    use super::*;
+
+    // A Redis failure used to be invisible: cache_service.rs has no logging and
+    // every call site discarded the result (#39). The discard is correct - the
+    // trait returns () so a cache problem cannot fail a user's update - but it
+    // happened without a word.
+
+    #[test]
+    fn a_successful_operation_is_not_reported() {
+        // The Ok path must stay silent, or every profile update logs a warning.
+        warn_if_cache_failed(Ok::<(), String>(()), "write", "profile:7", false);
+    }
+
+    #[test]
+    fn a_failure_does_not_propagate() {
+        // The whole point: the caller's update already succeeded.
+        warn_if_cache_failed(Err("redis down"), "profile invalidation", "profile:7", true);
+    }
+
+    #[test]
+    fn no_cache_result_is_discarded_without_logging() {
+        let source = include_str!("impls.rs");
+        // Needle built at runtime: a literal here would appear in the file
+        // being searched and the test would pass on its own text. That trap has
+        // bitten four times in this repo and always fails open.
+        let discarded = format!("let _ = crate::services::cache{}service::", "_");
+        assert!(
+            !source.contains(&discarded),
+            "a cache result is discarded without logging"
+        );
     }
 }
