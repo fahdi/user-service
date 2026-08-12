@@ -51,7 +51,6 @@ validator = { version = "0.16", features = ["derive"] }
 
 # Utilities
 chrono = { version = "0.4", features = ["serde"] }
-hex = "0.4"
 rand = "0.8"
 regex = "1.10"
 env_logger = "0.11"
