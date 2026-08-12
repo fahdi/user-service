@@ -8,7 +8,7 @@ User profile management, settings, avatar uploads, roles, and admin operations w
 - **Port**: 8083 (env: `PORT`, default code says 8081 but Dockerfile exposes 8083)
 - **Database**: MongoDB (`isupercoder` db, collections: `users`, `activities`)
 - **Cache**: Redis (deadpool-redis) + in-memory LRU (500 profiles, 300 settings)
-- **Tests**: 423 tests (201 unit + 49 DI integration + 95 endpoint/security)
+- **Tests**: 427 tests
 
 ## Architecture
 
@@ -44,7 +44,7 @@ src/
 ## API Endpoints
 
 ### User Profile
-- `GET  /health` -- Health check
+- `GET  /health` -- Health check. Pings MongoDB and returns **503** when it is unreachable (issue #42). The cache is deliberately excluded: `CacheService` returns `Option`, so a failure is indistinguishable from a miss and falls through to the database
 - `GET  /api/users/profile` -- Get authenticated user's profile (or another user via query)
 - `POST /api/users/profile-picture` -- Upload profile picture (multipart, resized to 200x200 JPEG)
 - `DELETE /api/users/avatar` -- Delete profile picture

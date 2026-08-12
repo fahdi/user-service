@@ -1,3 +1,24 @@
+## 2026-08-12 - /health could not fail, so an unreachable MongoDB reported healthy (#42)
+
+### Fixed
+- `health()` **took no state**, so it was structurally incapable of observing anything and answered 200 however broken the service was. Docker probes it with `curl -f http://localhost:8083/health` and `monitor-containers.sh` does the same, so both were told everything was fine regardless of MongoDB.
+- It now returns **503** when MongoDB is unreachable. Unhealthy has to be a status code: both probes read only the code, so a 200 carrying `"status": "unhealthy"` is invisible to each.
+
+### Added
+- `health_check` on the `UserRepository` trait, implemented by `MongoUserRepository` (a `ping`), and by the two test doubles. Without it on the trait the handler could not reach the database and no mock could fail it.
+
+### The cache is deliberately not fatal, for a different reason than the other services
+- utilities-forms#36 and file-management#46 excluded their caches because **nothing used them**. This service genuinely does: `di_handlers.rs` reads `get_cached_profile` and `get_cached_settings` and invalidates on write.
+- It is excluded because `CacheService` returns `Option` and `()` rather than `Result`, so a cache failure is **structurally indistinguishable from a miss** and falls through to MongoDB. A Redis outage costs latency, not correctness.
+- Making it fatal would convert that into a restart loop: `monitor-containers.sh` restarts after five consecutive failures, and restarting cannot fix an external Redis.
+
+### Verification
+- RED first, with the existing constant-200 test left in place so both directions are covered.
+- **Mutation-verified that the status code carries the assertion**: dropping the 503 branch so the handler reports only in the body fails exactly the new test.
+- 427 tests pass, clippy clean.
+
+### Noted, not fixed
+- The whole route table lives in `main.rs` and the tests hand-rebuild partial `App::new()` instances route by route, so no test exercises the routes as production mounts them. Same shape as file-management#48.
 ## 2026-08-11 - Chore: four unused dependencies removed; tokio moved to dev-dependencies (#31)
 ## 2026-08-12 - Upgrade redis 0.25 to 0.27, clearing the fleet's last future-incompat warning (#35)
 

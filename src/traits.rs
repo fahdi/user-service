@@ -31,6 +31,12 @@ impl std::error::Error for RepoError {}
 /// Abstracts all database operations the user handlers need.
 #[async_trait]
 pub trait UserRepository: Send + Sync {
+    /// Can the database actually be reached?
+    ///
+    /// On the trait so that `/health` can call it and a mock can fail it. The
+    /// endpoint took no state at all and so could observe nothing (#42).
+    async fn health_check(&self) -> RepoResult<()>;
+
     /// Find a single user by MongoDB filter, applying the given projection.
     async fn find_user(
         &self,

@@ -91,11 +91,39 @@ pub fn optimize_json_response<T: Serialize>(data: &T) -> std::result::Result<Vec
 }
 
 // Health check endpoint
-pub async fn health() -> Result<HttpResponse> {
-    Ok(HttpResponse::Ok().json(serde_json::json!({
-        "status": "healthy",
+/// Report whether this service can actually serve.
+///
+/// It took no state, so it was structurally incapable of observing anything and
+/// answered 200 however broken the service was (#42). Docker probes it with
+/// `curl -f` and `monitor-containers.sh` does the same, and both read **only
+/// the status code**, so an unhealthy report has to be a 503: a 200 carrying
+/// `"status": "unhealthy"` is invisible to either.
+///
+/// MongoDB is fatal. Profiles, settings, roles and activity all live there.
+///
+/// The cache is not, and unlike utilities-forms#36 and file-management#46 that
+/// is not because it goes unused: this service really does read
+/// `get_cached_profile` and `get_cached_settings`. It is excluded because
+/// `CacheService` returns `Option` and `()` rather than `Result`, so a cache
+/// failure is **structurally indistinguishable from a miss** and falls through
+/// to MongoDB. A Redis outage costs latency, not correctness, and treating it
+/// as fatal would turn that into a restart loop: `monitor-containers.sh`
+/// restarts after five consecutive failures, and restarting cannot fix an
+/// external Redis.
+pub async fn health(state: actix_web::web::Data<crate::traits::AppState>) -> Result<HttpResponse> {
+    let database_reachable = state.repo.health_check().await.is_ok();
+
+    let body = serde_json::json!({
+        "status": if database_reachable { "healthy" } else { "unhealthy" },
         "service": "user-service",
         "version": "1.0.0",
+        "database": if database_reachable { "ok" } else { "unavailable" },
         "timestamp": chrono::Utc::now()
-    })))
+    });
+
+    if database_reachable {
+        Ok(HttpResponse::Ok().json(body))
+    } else {
+        Ok(HttpResponse::ServiceUnavailable().json(body))
+    }
 }

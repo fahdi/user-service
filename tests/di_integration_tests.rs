@@ -25,6 +25,9 @@ use user_service::traits::{
 struct MockUserRepo {
     users: Arc<Mutex<Vec<Document>>>,
     activities: Arc<Mutex<Vec<Document>>>,
+    /// Simulate an unreachable database for `/health` (#42). Its own axis:
+    /// a repository can be reachable and still fail a particular query.
+    health_fails: Arc<Mutex<bool>>,
 }
 
 impl MockUserRepo {
@@ -32,7 +35,13 @@ impl MockUserRepo {
         Self {
             users: Arc::new(Mutex::new(Vec::new())),
             activities: Arc::new(Mutex::new(Vec::new())),
+            health_fails: Arc::new(Mutex::new(false)),
         }
+    }
+
+    fn with_failing_health(self) -> Self {
+        *self.health_fails.lock().unwrap() = true;
+        self
     }
 
     fn with_user(self, doc: Document) -> Self {
@@ -67,6 +76,13 @@ fn doc_matches_filter(doc: &Document, filter: &Document) -> bool {
 
 #[async_trait]
 impl UserRepository for MockUserRepo {
+    async fn health_check(&self) -> RepoResult<()> {
+        if *self.health_fails.lock().unwrap() {
+            return Err(RepoError("mock repository unreachable".into()));
+        }
+        Ok(())
+    }
+
     async fn find_user(
         &self,
         filter: Document,
@@ -308,19 +324,48 @@ mod health_tests {
     use super::*;
     use user_service::health;
 
-    #[actix_web::test]
-    async fn test_health_returns_200_with_status() {
-        let app = test::init_service(App::new().route("/health", web::get().to(health))).await;
+    /// The endpoint Docker probes must be able to say no.
+    ///
+    /// It took no state, so it was structurally incapable of observing anything
+    /// and answered 200 however broken the service was (#42). `curl -f` and
+    /// `monitor-containers.sh` read only the status code, so an unhealthy
+    /// report has to *be* a 503.
+    async fn health_response(repo: MockUserRepo) -> (u16, serde_json::Value) {
+        let state = make_state(repo);
+        let app = test::init_service(
+            App::new()
+                .app_data(state)
+                .route("/health", web::get().to(health)),
+        )
+        .await;
 
         let req = test::TestRequest::get().uri("/health").to_request();
         let resp = test::call_service(&app, req).await;
+        let status = resp.status().as_u16();
+        (status, test::read_body_json(resp).await)
+    }
 
-        assert_eq!(resp.status().as_u16(), 200);
-        let body: serde_json::Value = test::read_body_json(resp).await;
+    #[actix_web::test]
+    async fn test_health_returns_200_with_status() {
+        let (status, body) = health_response(MockUserRepo::new()).await;
+
+        assert_eq!(status, 200);
         assert_eq!(body["status"], "healthy");
         assert_eq!(body["service"], "user-service");
         assert_eq!(body["version"], "1.0.0");
         assert!(body["timestamp"].is_string());
+    }
+
+    #[actix_web::test]
+    async fn unreachable_database_is_a_503() {
+        let (status, body) = health_response(MockUserRepo::new().with_failing_health()).await;
+
+        assert_eq!(
+            status, 503,
+            "an unreachable database must be visible to `curl -f`, body was {body}"
+        );
+        assert_eq!(body["status"], "unhealthy");
+        assert_eq!(body["database"], "unavailable");
     }
 }
 
