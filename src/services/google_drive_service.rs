@@ -214,7 +214,7 @@ async fn make_file_public(
     });
 
     let client = metadata_client()?;
-    let _response = client
+    let response = client
         .post(format!(
             "{}/drive/v3/files/{}/permissions",
             drive_api_base(),
@@ -225,6 +225,28 @@ async fn make_file_public(
         .json(&permission)
         .send()
         .await?;
+
+    // `?` above covers transport failures only. A 403 or 404 from Drive is a
+    // perfectly successful HTTP exchange, so without this the response was
+    // discarded and the function reported `Ok(())` while the file stayed
+    // private. This is the last step of the avatar upload chain, so the caller
+    // was told the upload worked and the stored URL then 404d for every
+    // viewer, with nothing in the logs because nothing looked (#53).
+    //
+    // The other calls in this module catch failures only incidentally, by
+    // parsing the body and requiring an `id` field that an error response does
+    // not carry. A sharing request has no such field to lean on.
+    let status = response.status();
+    if !status.is_success() {
+        let body = response.text().await.unwrap_or_default();
+        log::error!(
+            "Drive refused to make file {} public: status={} body={}",
+            file_id,
+            status,
+            body
+        );
+        return Err(format!("Drive rejected the sharing request: {}", status).into());
+    }
 
     Ok(())
 }
@@ -280,6 +302,69 @@ mod bounded_drive_calls {
             elapsed < Duration::from_secs(30),
             "took {elapsed:?}; the Drive metadata call is not bounded"
         );
+    }
+
+    /// A rejected sharing request must not report success.
+    ///
+    /// `make_file_public` discarded its response. `?` covers transport
+    /// failures only, so a 403 or 404 from Drive is a perfectly successful
+    /// HTTP exchange and the function returned `Ok(())`.
+    ///
+    /// It is the last step of the avatar upload chain, so the caller was told
+    /// the upload succeeded while the file stayed private. The stored
+    /// `profilePictureUrl` then 404s for every viewer, and nothing appears in
+    /// the logs because nothing looked (#53).
+    ///
+    /// The other three Drive calls in this module detect failure only
+    /// incidentally: they parse the response and `.ok_or_else` on a missing
+    /// `id` field, which an error body happens not to have. A sharing request
+    /// has no such field, so this one had nothing at all.
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn a_rejected_sharing_request_is_an_error() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/drive/v3/files/file-1/permissions"))
+            .respond_with(ResponseTemplate::new(403).set_body_json(serde_json::json!({
+                "error": { "code": 403, "message": "Insufficient permissions" }
+            })))
+            .mount(&server)
+            .await;
+
+        let _guard = DRIVE_ENV_MUTEX.lock().await;
+        std::env::set_var("GOOGLE_DRIVE_API_BASE_URL", server.uri());
+
+        let result = make_file_public("file-1", "token").await;
+
+        std::env::remove_var("GOOGLE_DRIVE_API_BASE_URL");
+
+        assert!(
+            result.is_err(),
+            "a 403 from Drive means the file is not public; reporting Ok hides it"
+        );
+    }
+
+    /// And the success path must still succeed.
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn an_accepted_sharing_request_is_ok() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/drive/v3/files/file-2/permissions"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "id": "anyoneWithLink", "role": "reader", "type": "anyone"
+            })))
+            .mount(&server)
+            .await;
+
+        let _guard = DRIVE_ENV_MUTEX.lock().await;
+        std::env::set_var("GOOGLE_DRIVE_API_BASE_URL", server.uri());
+
+        let result = make_file_public("file-2", "token").await;
+
+        std::env::remove_var("GOOGLE_DRIVE_API_BASE_URL");
+
+        assert!(result.is_ok(), "a 200 must still be treated as success");
     }
 
     /// The upload bound must not be so tight that it breaks a real avatar.
