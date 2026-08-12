@@ -167,3 +167,153 @@ pub fn configure_routes(cfg: &mut actix_web::web::ServiceConfig) {
                 .route("/{id}", web::put().to(admin_update_user)),
         );
 }
+
+#[cfg(test)]
+mod routed_handlers_authenticate {
+    //! Every routed handler must authenticate itself.
+    //!
+    //! Neither `web::scope("/api/users")` nor `web::scope("/api/admin/users")`
+    //! is wrapped, so there is no middleware enforcing anything. Each handler
+    //! calls `extract_claims_from_request`, and the admin ones additionally
+    //! call `is_admin`. All 13 protected handlers do so correctly today, which
+    //! is why this is written now rather than after the fourteenth (#57).
+    //!
+    //! Source-level because the property is the presence of a call inside a
+    //! handler, and driving it behaviourally would need a live Mongo. Comments
+    //! are stripped and needles assembled at runtime, so neither this doc nor
+    //! the assertions below can satisfy the check.
+    use std::collections::HashMap;
+
+    /// Public by design: the container probe sends no credentials.
+    const PUBLIC_BY_DESIGN: [&str; 1] = ["health"];
+
+    fn without_comments(source: &str) -> String {
+        source
+            .lines()
+            .map(|line| line.split("//").next().unwrap_or(""))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    fn read(relative: &str) -> String {
+        let path = format!("{}/src/{}", env!("CARGO_MANIFEST_DIR"), relative);
+        std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{path} must be readable: {e}"))
+    }
+
+    /// `(handler name, is it under the admin scope)` for every routed handler.
+    fn routed_handlers() -> Vec<(String, bool)> {
+        let lib = without_comments(&read("lib.rs"));
+        let admin_scope_at = lib.find("/api/admin/users");
+
+        let mut out = Vec::new();
+        let mut rest = lib.as_str();
+        let mut consumed = 0usize;
+
+        while let Some(at) = rest.find(".route(") {
+            // A fixed window rather than "up to the first `)`": the first
+            // paren in `.route("/x", web::get().to(handler))` closes
+            // `web::get()`, so cutting there finds no `.to(` at all. The
+            // non-empty assertion below caught that immediately.
+            let after = &rest[at..];
+            let call = &after[..after.len().min(160)];
+
+            if let Some(to_at) = call.find(".to(") {
+                let name: String = call[to_at + 4..]
+                    .chars()
+                    .take_while(|c| c.is_alphanumeric() || *c == '_')
+                    .collect();
+                if !name.is_empty() {
+                    let position = consumed + at;
+                    let is_admin_route = admin_scope_at.is_some_and(|s| position > s);
+                    out.push((name, is_admin_route));
+                }
+            }
+            consumed += at + 7;
+            rest = &rest[at + 7..];
+        }
+        out
+    }
+
+    fn handler_bodies() -> HashMap<String, String> {
+        let source = without_comments(&read("handlers/di_handlers.rs"));
+        let marker = "pub async fn ";
+        let mut bodies = HashMap::new();
+
+        let positions: Vec<usize> = source.match_indices(marker).map(|(i, _)| i).collect();
+        for (index, &start) in positions.iter().enumerate() {
+            let end = positions.get(index + 1).copied().unwrap_or(source.len());
+            let name: String = source[start + marker.len()..]
+                .chars()
+                .take_while(|c| c.is_alphanumeric() || *c == '_')
+                .collect();
+            bodies.insert(name, source[start..end].to_string());
+        }
+        bodies
+    }
+
+    #[test]
+    fn every_protected_handler_extracts_claims() {
+        let routed = routed_handlers();
+
+        // A route table that parsed to nothing would make everything below
+        // vacuous, which is the shape this repository keeps finding.
+        assert!(
+            routed.len() >= 12,
+            "only parsed {} routed handlers; the route table shape changed",
+            routed.len()
+        );
+
+        let bodies = handler_bodies();
+        // The handlers call the trait method `state.auth.extract_claims(&req)`,
+        // not the free `extract_claims_from_request`. An earlier draft of this
+        // guard used the latter and flagged all 13 correct handlers.
+        let needle = format!("extract{}", "_claims");
+
+        let unprotected: Vec<&String> = routed
+            .iter()
+            .filter(|(name, _)| !PUBLIC_BY_DESIGN.contains(&name.as_str()))
+            .filter_map(|(name, _)| bodies.get(name).map(|body| (name, body)))
+            .filter(|(_, body)| !body.contains(&needle))
+            .map(|(name, _)| name)
+            .collect();
+
+        assert!(
+            unprotected.is_empty(),
+            "routed handlers that never extract claims: {unprotected:?}. \
+             Neither scope is wrapped, so a handler that does not check is open."
+        );
+    }
+
+    #[test]
+    fn every_admin_handler_checks_the_role() {
+        let routed = routed_handlers();
+        let bodies = handler_bodies();
+        let needle = format!("is{}", "_admin");
+
+        let admin_routes: Vec<&String> = routed
+            .iter()
+            .filter(|(_, is_admin_route)| *is_admin_route)
+            .map(|(name, _)| name)
+            .collect();
+
+        // Same reason as above: an empty set would pass while checking nothing,
+        // and the admin scope is exactly where that matters most.
+        assert!(
+            !admin_routes.is_empty(),
+            "found no routes under the admin scope; the scope layout changed"
+        );
+
+        let unchecked: Vec<&&String> = admin_routes
+            .iter()
+            .filter_map(|name| bodies.get(name.as_str()).map(|body| (name, body)))
+            .filter(|(_, body)| !body.contains(&needle))
+            .map(|(name, _)| name)
+            .collect();
+
+        assert!(
+            unchecked.is_empty(),
+            "admin-scope handlers with no role check: {unchecked:?}. The scope \
+             is not wrapped, so membership alone grants nothing."
+        );
+    }
+}
