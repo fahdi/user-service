@@ -17,6 +17,27 @@
 - Re-swept the fleet afterwards: **no service now places raw error text in a response body.**
 - 431 tests pass, clippy clean.
 
+## 2026-08-12 - Auth and admin checks were per-handler with nothing requiring them (#57)
+
+### Added
+- `routed_handlers_authenticate` in `lib.rs`. Two guards: every routed handler must call `extract_claims`, and every handler under `/api/admin/users` must additionally call `is_admin`.
+
+### There was no live vulnerability
+- Neither `web::scope("/api/users")` nor `web::scope("/api/admin/users")` is wrapped, so nothing enforces either check. All 13 protected handlers authenticate correctly and both admin routes are role-checked; each was verified individually. What was missing is the guarantee.
+- A handler added to the admin scope without a role check is an admin endpoint any authenticated user can call. One added without `extract_claims` is open to anyone. Neither fails the compiler, clippy, or the suite, and the route table lives in a different file from the checks, so review has to notice an absence.
+
+### Fleet position
+- Enumerating how each service enforces auth: projects-api, file-management, utilities-forms and system-monitoring use a layer; messages-chat, notifications and user-service do it per-handler. messages-chat was guarded in its #53, this covers user-service, and notifications remains.
+
+### Three of my own mistakes during this, all caught rather than shipped
+- The first fleet detection reported four services as per-handler because it required `auth` on the same line as the layer call, and file-management splits them across lines.
+- The second missed system-monitoring, which applies `require_admin_layer` through bare `from_fn(...)` rather than `from_fn_with_state(...)`.
+- The guard's first needle was `extract_claims_from_request`, the free function. Handlers call the trait method `state.auth.extract_claims(&req)`, so it flagged all 13 correct handlers. An earlier ad-hoc check had matched the loose substring `claims` and reached the right answer for the wrong reason.
+
+### Verification
+- Mutations that rename a method to something nonexistent do not compile and prove nothing, which happened twice here. Both properties are instead verified by **adding a real routed handler**: one that never authenticates, and one that authenticates but skips the role check. Both compile cleanly and are named by the respective guard.
+- Both guards fail if they resolve no routes, rather than passing on an empty set. That assertion immediately caught a bug in the guard's own route parser, which cut at the first `)` and so matched `web::get()` instead of `.to(handler)`.
+
 ## 2026-08-12 - A throttled Drive search created duplicate folders (#55)
 
 ### Fixed
