@@ -1,3 +1,20 @@
+## 2026-08-13 - GDPR export: silent truncation at 100, and a failed query exported as an empty history (#61)
+
+### Fixed
+- `export_user_data` fetched activities with `.unwrap_or_default()`, so any repository error became `success: true` with `activities: []`. "We could not read your history" and "you have no history" are not the same answer anywhere, and least of all on the endpoint whose output is a person's record of their own data. It now returns 500 with the driver's text logged rather than disclosed, matching the `find_user` path forty lines above it in the same handler (#47).
+- The 100-item cap was invisible. A user with 5,000 activities received the 100 most recent and nothing in the response indicated the other 4,900 existed. `UserDataExport` now carries `activities_total` and `activities_truncated`, both `#[serde(default)]` so exports written before this field still deserialize.
+- **The cap's value is deliberately unchanged.** Whether a GDPR export should return a complete history, and at what memory cost, is a product decision. This makes the truncation visible; raising the bound can follow.
+
+### Note on the count
+- `activities_total` comes from `count_activities`, which counts what is stored, while `activities` holds what could be standardized. A document the handler cannot parse now shows up as truncation, which is correct: the export is incomplete either way, and the previous behaviour reported that silence as a complete record.
+
+### Discovered while fixing
+- `tests/handler_integration_tests.rs` contains a parallel reimplementation of 13 handlers (lines 669-1790) which its tests exercise instead of the production code. Its copy of the export handler carried the same `.unwrap_or_default()` defect. The copy is aligned here so the suite does not bless behaviour that was just fixed; the duplication itself is filed separately, since deleting ~1,100 lines of shadow handlers is not a small change.
+
+### Verification
+- RED first: three tests failed against the old handler (failure exported as empty history, truncation undisclosed, and short history wrongly marked). Mutations: restoring `unwrap_or_default` fails the error test, hardcoding `truncated: false` fails the disclosure test, and hardcoding `true` fails the negative test. Full suite 165 passing, clippy clean.
+- One test was wrong before the code was: the first seeds omitted `_id`, so `standardize_activity_doc` rejected all 150 and the export legitimately held zero. Fixed the seeds, not the assertion.
+
 ## 2026-08-13 - Admin user search: sort field allowlisted; tautological tests replaced (#59)
 
 ### Fixed
