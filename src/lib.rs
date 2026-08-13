@@ -11,7 +11,6 @@ use deadpool_redis::{Config as RedisConfig, Pool as RedisPool, Runtime};
 use lazy_static::lazy_static;
 use lru::LruCache;
 use mongodb::{options::ClientOptions, Client, Database};
-use serde::Serialize;
 use std::env;
 use std::num::NonZeroUsize;
 use std::sync::{Arc, Mutex};
@@ -76,18 +75,6 @@ pub async fn get_database() -> std::result::Result<Database, Box<dyn std::error:
     // Initialize client if not exists
     let client = init_mongodb_client().await?;
     Ok(client.database("isupercoder"))
-}
-
-// Optimized JSON serialization using simd-json (Phase 4 optimization)
-pub fn optimize_json_response<T: Serialize>(data: &T) -> std::result::Result<Vec<u8>, String> {
-    let mut buffer = Vec::with_capacity(1024);
-    match simd_json::to_writer(&mut buffer, data) {
-        Ok(_) => Ok(buffer),
-        Err(_) => {
-            // Fallback to serde_json if simd-json fails
-            serde_json::to_vec(data).map_err(|e| e.to_string())
-        }
-    }
 }
 
 // Health check endpoint

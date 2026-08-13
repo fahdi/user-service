@@ -1,3 +1,19 @@
+## 2026-08-14 - simd-json was compiled in for a function nothing called (#66)
+
+### Removed
+- `optimize_json_response` in `lib.rs` had **zero references anywhere** - no handler, no test, no feature flag. Every response this service returns is serialized by actix-web's `Json` through serde_json, and always has been. The function, the `simd-json 0.13` dependency it existed to use, and the now-unused `serde::Serialize` import are gone.
+- `CLAUDE.md` listed the optimization under Key Design Decisions and described the dependency as this service's JSON serializer. Both claims are removed: a reader assessing performance characteristics was being told something untrue.
+
+### Why remove rather than wire it in
+- Adopting it would mean hand-serializing at every call site and returning raw bytes instead of `HttpResponse::Ok().json(..)`, in exchange for a win nobody has measured on responses this size. Deletion is recoverable from git history if a measurement later justifies it; carrying unreachable code built on `unsafe` SIMD is not free in the meantime - it compiles on every build and appears in the dependency tree and in `cargo audit` output.
+
+### Guards added
+- `tests/documented_optimisations.rs` fails if any `pub fn` in `lib.rs` is referenced nowhere, and if `CLAUDE.md` and `Cargo.toml` disagree about whether simd-json is part of this service. A third test fails if the source walk or the document read finds almost nothing.
+- The first version of the guard was wrong and passed against the defect: it asked whether `simd_json::` appeared in the source, and it did - inside the dead function. **Presence is not reachability**, so the rule had to be about references instead.
+
+### Verification
+- RED first, naming `optimize_json_response`. Mutations: adding an orphaned `pub fn` fails by name, re-adding the documentation claim without the dependency fails naming both sides, and blinding the source walk trips the inspected-nothing test. Full suite passes, clippy clean.
+
 ## 2026-08-14 - Cache invalidation always reported success, making its stale-data warning unreachable (#64)
 
 ### Fixed
