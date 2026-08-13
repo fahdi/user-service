@@ -8,7 +8,7 @@ User profile management, settings, avatar uploads, roles, and admin operations w
 - **Port**: 8083 (env: `PORT`, default code says 8081 but Dockerfile exposes 8083)
 - **Database**: MongoDB (`isupercoder` db, collections: `users`, `activities`)
 - **Cache**: Redis (deadpool-redis) + in-memory LRU (500 profiles, 300 settings)
-- **Tests**: 427 tests
+- **Tests**: ~441 tests (exact count lives in CI)
 
 ## Architecture
 
@@ -85,7 +85,7 @@ src/
 
 ```bash
 cargo run          # Start on port 8083
-cargo test         # Run 201 tests
+cargo test         # Run the full suite (~441 tests)
 cargo clippy       # Zero warnings required
 ```
 
@@ -116,7 +116,7 @@ cargo clippy       # Zero warnings required
 
 ## Testing
 
-- 345 total tests (201 unit + 49 DI integration + 95 endpoint/security)
+- ~441 tests (exact count lives in CI) across unit, DI integration, and endpoint/security suites
 - DI integration tests (`tests/di_integration_tests.rs`): test all 13 endpoints via trait-based mocks
 - `mockall 0.13` available for trait mocking
 - Security tests: password generation uniqueness, email validation edge cases, regex escaping

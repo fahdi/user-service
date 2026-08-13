@@ -1,3 +1,16 @@
+## 2026-08-13 - Admin user search: sort field allowlisted; tautological tests replaced (#59)
+
+### Fixed
+- `build_sort_doc` passed any caller string from the query into `$sort` as a field name on the `users` collection. The response projection hides `password`/`resetToken`, but sorting BY them still worked, making sort order an oracle on the hidden values; a nonexistent field silently served natural order while looking sorted. Now allowlisted (`name`, `email`, `role`, `updatedAt`); `createdAt`, the default, and unknown fields sort `_id` instead, because the users collection stores mixed `createdAt` shapes (#28) and MongoDB sorts across BSON types by type bracket before value - `_id` is type-uniform and embeds the creation timestamp.
+
+### Tests
+- `sort_order_validation_tests` in tests/unit_tests.rs contained THREE tautologies: an array asserted to contain its own elements, a locally recomputed ternary compared to itself, and locally re-derived defaults compared to their own literals. None touched production code; the array even documented the exact allowlist nobody had implemented. Replaced with real specs against `build_sort_doc` (RED-first: 2 of 3 failed against the old pass-through).
+- `tests/handler_integration_tests.rs` carried a verbatim COPY of `build_sort_doc` (the crate has a lib and the file already imports `user_service::` modules); the copy is now an import of the real helper, so it can no longer drift green while production changes. The remaining copied helpers are recorded in #59 for a later pass.
+- Mutations (pass-through restored, createdAt allowlisted back) each fail exactly one spec. 441 tests, clippy clean.
+
+### Docs
+- CLAUDE.md carried three different stale test counts (427, 201, 345); all moved to the approximate-plus-CI convention (~441).
+
 ## 2026-08-12 - Stop returning raw database errors to callers (#47)
 
 ### Fixed

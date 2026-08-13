@@ -259,16 +259,30 @@ pub fn build_search_filter(q: Option<&str>, role: Option<&str>) -> Document {
     filter
 }
 
-/// Build a sort document from optional sort field and order.
+/// Build the `$sort` document for the admin user search (#59).
 ///
-/// Defaults to `createdAt` descending.
+/// The field arrives from the query string, so it is allowlisted: the
+/// response projection hides password/resetToken, but sorting BY them is an
+/// ordering oracle on the hidden values, and a nonexistent field makes
+/// `$sort` compare equal values and silently serve natural order.
+///
+/// `createdAt` (also the default, and the fallback for unknown fields)
+/// sorts `_id`: the users collection stores mixed createdAt shapes (#28),
+/// and MongoDB sorts across BSON types by type bracket before value, so a
+/// createdAt sort partitions by write era. ObjectIds are type-uniform and
+/// embed the creation timestamp. `updatedAt` stays by name: rewritten as a
+/// native date on every update, it converges, and no uniform substitute
+/// exists.
 pub fn build_sort_doc(sort: Option<&str>, order: Option<&str>) -> Document {
-    let sort_field = sort.unwrap_or("createdAt");
     let sort_order: i32 = match order {
         Some("asc") => 1,
         _ => -1,
     };
-    doc! { sort_field: sort_order }
+    let field = match sort.unwrap_or("createdAt") {
+        allowed @ ("name" | "email" | "role" | "updatedAt") => allowed,
+        _ => "_id",
+    };
+    doc! { field: sort_order }
 }
 
 /// Build a MongoDB filter for the user admin lookup.
@@ -1080,10 +1094,14 @@ mod tests {
     // build_sort_doc
     // -----------------------------------------------------------------------
 
+    // Used to assert `createdAt` here. The users collection stores mixed
+    // createdAt shapes (#28) and Mongo sorts across BSON types by type
+    // bracket, so the default now sorts the type-uniform `_id`, which
+    // embeds the creation timestamp (#59).
     #[test]
     fn test_sort_doc_defaults() {
         let sort = build_sort_doc(None, None);
-        assert_eq!(sort.get_i32("createdAt").unwrap(), -1);
+        assert_eq!(sort.get_i32("_id").unwrap(), -1);
     }
 
     #[test]

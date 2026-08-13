@@ -621,14 +621,10 @@ mod handler_helpers {
         filter
     }
 
-    pub fn build_sort_doc(sort: Option<&str>, order: Option<&str>) -> Document {
-        let sort_field = sort.unwrap_or("createdAt");
-        let sort_order: i32 = match order {
-            Some("asc") => 1,
-            _ => -1,
-        };
-        doc! { sort_field: sort_order }
-    }
+    // The real helper, not a copy: a copy here would stay green while
+    // production drifted (#59; messages-chat#34's class). The crate has a
+    // lib, so there is no reason to duplicate.
+    pub use user_service::handlers::helpers::build_sort_doc;
 
     pub fn build_admin_update_fields(body: &AdminUserUpdateRequest) -> Document {
         let mut update_doc = doc! { "updatedAt": mongodb::bson::DateTime::now() };
