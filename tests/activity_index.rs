@@ -73,3 +73,45 @@ fn the_indexed_collection_is_the_one_the_queries_open() {
         "impls.rs no longer opens user_activities; the index may be orphaned"
     );
 }
+
+// ── The collection has no writer (#70) ─────────────────────────────────
+//
+// `GET /api/users/activity` and the GDPR export both read `user_activities`,
+// and nothing in the monorepo writes it - no insert, in any service. So both
+// return empty for every user, always.
+//
+// This does not invalidate the index above: it is correctly shaped for the
+// queries, and will matter the moment a writer exists. It does mean the
+// documentation must not describe a populated log.
+
+/// Writes would appear as an insert against the activities collection. The
+/// accessor and the index declaration are reads and setup, not writes.
+fn has_an_activity_writer() -> bool {
+    let impls = include_str!("../src/impls.rs");
+    let production = impls.split("#[cfg(test)]").next().unwrap_or("");
+
+    // Must be an insert against the activities collection, not merely both
+    // strings appearing somewhere in the file - `impls.rs` inserts into
+    // `users`, and a looser check reported a writer that does not exist.
+    production.contains("insert_activity")
+        || production.contains("log_activity")
+        || production
+            .split("activities_collection")
+            .skip(1)
+            .any(|after| after[..after.len().min(400)].contains("insert_"))
+}
+
+#[test]
+fn the_docs_do_not_claim_a_populated_activity_log() {
+    let doc = std::fs::read_to_string("CLAUDE.md").expect("CLAUDE.md is readable");
+
+    // The claim and the implementation must move together: once a writer
+    // exists this assertion stops constraining the wording.
+    let claims_populated = doc.contains("Get user activity log (paginated)");
+
+    assert!(
+        !claims_populated || has_an_activity_writer(),
+        "CLAUDE.md describes a user activity log, but nothing writes \
+         user_activities - the endpoint returns empty for every user"
+    );
+}

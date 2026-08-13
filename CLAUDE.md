@@ -59,7 +59,7 @@ src/
 ### Roles & Activity
 - `GET  /api/users/roles` -- Get user role definitions and permissions
 - `PUT  /api/users/roles` -- Update user role (admin only)
-- `GET  /api/users/activity` -- Get user activity log (paginated)
+- `GET  /api/users/activity` -- Reads the `user_activities` collection, paginated. **Nothing writes that collection** - no service in the monorepo inserts into it - so this returns an empty list for every user, and the GDPR export's `activities` array is always empty with `activities_total: 0`. Which events belong in an activity log, and which service records them, is an open product decision (#70)
 
 ### Data Management
 - `GET  /api/users/export` -- Export user data (GDPR compliance)
