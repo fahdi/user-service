@@ -1243,16 +1243,47 @@ pub async fn export_user_data(
         Some(UserSettings::default())
     };
 
-    let activity_docs = state
+    // The export is bounded: a history of unknown size must not be loaded
+    // whole to answer one request. The bound is disclosed rather than hidden,
+    // so the caller can tell a complete record from a partial one (#61).
+    const ACTIVITY_EXPORT_LIMIT: i64 = 100;
+    let activity_filter = doc! { "user_id": &claims.user_id };
+
+    let activities_total = match state.repo.count_activities(activity_filter.clone()).await {
+        Ok(total) => total,
+        Err(e) => {
+            log::error!("Database error counting activities for export: {}", e);
+            return Ok(HttpResponse::InternalServerError().json(ErrorResponse {
+                success: false,
+                error: "Database error occurred".to_string(),
+            }));
+        }
+    };
+
+    // Not `unwrap_or_default()`: that reported a failed query as an empty
+    // history, and this endpoint's output is a person's record of their own
+    // data, where "we could not read it" and "there is none" are not the same
+    // answer. Matches the find_user path above, including #47's rule that the
+    // driver's text goes to the log and not to the caller.
+    let activity_docs = match state
         .repo
         .find_activities(
-            doc! { "user_id": &claims.user_id },
+            activity_filter,
             Some(doc! { "timestamp": -1 }),
             None,
-            Some(100),
+            Some(ACTIVITY_EXPORT_LIMIT),
         )
         .await
-        .unwrap_or_default();
+    {
+        Ok(docs) => docs,
+        Err(e) => {
+            log::error!("Database error fetching activities for export: {}", e);
+            return Ok(HttpResponse::InternalServerError().json(ErrorResponse {
+                success: false,
+                error: "Database error occurred".to_string(),
+            }));
+        }
+    };
 
     let activities: Vec<_> = activity_docs
         .iter()
@@ -1262,6 +1293,8 @@ pub async fn export_user_data(
     let export_data = UserDataExport {
         user: standardized_user,
         settings,
+        activities_truncated: activities_total > activities.len() as u64,
+        activities_total,
         activities,
         exported_at: chrono::Utc::now().to_rfc3339(),
     };

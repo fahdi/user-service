@@ -1043,6 +1043,16 @@ pub struct UserDataExport {
     pub user: StandardizedUser,
     pub settings: Option<UserSettings>,
     pub activities: Vec<ActivityLog>,
+    /// How many activities exist on record, which is not always how many are
+    /// in `activities` above: the export is bounded, and a partial record
+    /// presented as a whole one is the failure this exists to prevent (#61).
+    /// Defaulted on deserialize so exports written before this field still
+    /// parse.
+    #[serde(default)]
+    pub activities_total: u64,
+    /// True when `activities` holds fewer than `activities_total`.
+    #[serde(default)]
+    pub activities_truncated: bool,
     pub exported_at: String,
 }
 

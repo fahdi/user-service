@@ -30,6 +30,10 @@ struct MockUserRepo {
     health_fails: Arc<Mutex<bool>>,
     /// Make every query fail, to exercise the error path (#47).
     query_error: Arc<Mutex<Option<String>>>,
+    /// Fail only the activity queries (#61). Its own axis because the export
+    /// handler reads the user first: a global failure would return 500 from
+    /// that earlier call and prove nothing about the activity fetch.
+    activities_error: Arc<Mutex<Option<String>>>,
 }
 
 impl MockUserRepo {
@@ -39,6 +43,7 @@ impl MockUserRepo {
             activities: Arc::new(Mutex::new(Vec::new())),
             health_fails: Arc::new(Mutex::new(false)),
             query_error: Arc::new(Mutex::new(None)),
+            activities_error: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -46,6 +51,12 @@ impl MockUserRepo {
     /// does not repeat it back to the caller (#47).
     fn with_query_error(self, msg: &str) -> Self {
         *self.query_error.lock().unwrap() = Some(msg.to_string());
+        self
+    }
+
+    /// Only the activity queries fail; the user lookup still succeeds (#61).
+    fn with_activities_error(self, msg: &str) -> Self {
+        *self.activities_error.lock().unwrap() = Some(msg.to_string());
         self
     }
 
@@ -186,6 +197,9 @@ impl UserRepository for MockUserRepo {
         skip: Option<u64>,
         limit: Option<i64>,
     ) -> RepoResult<Vec<Document>> {
+        if let Some(msg) = self.activities_error.lock().unwrap().clone() {
+            return Err(RepoError(msg));
+        }
         let activities = self
             .activities
             .lock()
@@ -1342,6 +1356,129 @@ mod export_tests {
         assert!(body["data"]["user"].is_object());
         assert_eq!(body["data"]["user"]["email"], "alice@test.com");
         assert!(body["data"]["exported_at"].is_string());
+    }
+
+    /// A person's own record of their data must not report a failed query as
+    /// an empty history (#61). `.unwrap_or_default()` made the two
+    /// indistinguishable, while the user lookup in the same handler has
+    /// returned 500 with the detail logged, not disclosed, since #47.
+    #[actix_web::test]
+    async fn test_export_reports_a_failed_activity_query_not_an_empty_history() {
+        let oid = test_oid();
+        let repo = MockUserRepo::new()
+            .with_user(make_user_doc(oid, "alice@test.com", "Alice", "customer"))
+            .with_activities_error("mongodb: connection reset by peer");
+        let state = make_state(repo);
+
+        let app = test::init_service(
+            App::new()
+                .app_data(state)
+                .route("/api/users/export", web::get().to(export_user_data)),
+        )
+        .await;
+
+        let req = test::TestRequest::get()
+            .uri("/api/users/export")
+            .insert_header(("authorization", customer_token(&oid)))
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+
+        assert_eq!(
+            resp.status().as_u16(),
+            500,
+            "a failed activity query must not be exported as an empty history"
+        );
+        let body: serde_json::Value = test::read_body_json(resp).await;
+        assert_eq!(body["success"], false);
+        // #47: the rendered driver error stays in the log.
+        let rendered = body.to_string();
+        assert!(
+            !rendered.contains("connection reset by peer"),
+            "the driver's error text must not reach the caller: {rendered}"
+        );
+    }
+
+    /// The export caps the history at 100. Whether that is the right bound is
+    /// a product question; exporting a partial record as though it were whole
+    /// is not (#61).
+    #[actix_web::test]
+    async fn test_export_discloses_that_the_history_was_truncated() {
+        let oid = test_oid();
+        let mut repo =
+            MockUserRepo::new().with_user(make_user_doc(oid, "alice@test.com", "Alice", "customer"));
+        for i in 0..150 {
+            repo = repo.with_activity(doc! {
+                // _id is required: standardize_activity_doc rejects a document
+                // without one, and the handler drops what it cannot standardize.
+                "_id": ObjectId::new(),
+                "user_id": oid.to_hex(),
+                "action": format!("login-{i}"),
+                "timestamp": BsonDateTime::now(),
+            });
+        }
+        let state = make_state(repo);
+
+        let app = test::init_service(
+            App::new()
+                .app_data(state)
+                .route("/api/users/export", web::get().to(export_user_data)),
+        )
+        .await;
+
+        let req = test::TestRequest::get()
+            .uri("/api/users/export")
+            .insert_header(("authorization", customer_token(&oid)))
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+
+        assert_eq!(resp.status().as_u16(), 200);
+        let body: serde_json::Value = test::read_body_json(resp).await;
+        assert_eq!(
+            body["data"]["activities"].as_array().map(|a| a.len()),
+            Some(100),
+            "the bound itself is unchanged by this fix"
+        );
+        assert_eq!(
+            body["data"]["activities_total"], 150,
+            "the export must say how many activities exist"
+        );
+        assert_eq!(
+            body["data"]["activities_truncated"], true,
+            "the export must say it is incomplete"
+        );
+    }
+
+    /// The disclosure must be honest in the other direction too: a complete
+    /// export must not label itself truncated.
+    #[actix_web::test]
+    async fn test_export_of_a_short_history_is_not_marked_truncated() {
+        let oid = test_oid();
+        let repo = MockUserRepo::new()
+            .with_user(make_user_doc(oid, "alice@test.com", "Alice", "customer"))
+            .with_activity(doc! {
+                "_id": ObjectId::new(),
+                "user_id": oid.to_hex(),
+                "action": "login",
+                "timestamp": BsonDateTime::now(),
+            });
+        let state = make_state(repo);
+
+        let app = test::init_service(
+            App::new()
+                .app_data(state)
+                .route("/api/users/export", web::get().to(export_user_data)),
+        )
+        .await;
+
+        let req = test::TestRequest::get()
+            .uri("/api/users/export")
+            .insert_header(("authorization", customer_token(&oid)))
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+
+        let body: serde_json::Value = test::read_body_json(resp).await;
+        assert_eq!(body["data"]["activities_total"], 1);
+        assert_eq!(body["data"]["activities_truncated"], false);
     }
 
     #[actix_web::test]

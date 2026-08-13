@@ -1439,9 +1439,21 @@ mod handlers {
             .filter_map(|d| standardize_activity_doc(d).ok())
             .collect();
 
+        // Mirrors the production handler's disclosure (#61). This module is a
+        // parallel reimplementation of the real handlers, so a copy that
+        // disagreed with production would bless the behaviour that was fixed.
+        // The duplication itself is tracked separately.
+        let activities_total = state
+            .repo
+            .count_activities(doc! { "user_id": &claims.user_id })
+            .await
+            .unwrap_or(activities.len() as u64);
+
         let export_data = UserDataExport {
             user: standardized_user,
             settings,
+            activities_truncated: activities_total > activities.len() as u64,
+            activities_total,
             activities,
             exported_at: chrono::Utc::now().to_rfc3339(),
         };
