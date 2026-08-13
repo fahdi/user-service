@@ -1,4 +1,22 @@
 ## 2026-08-14 - simd-json was compiled in for a function nothing called (#66)
+## 2026-08-14 - The activity log has no writer, so its endpoints can only return empty (#70)
+
+### Documented
+- `CLAUDE.md` described `GET /api/users/activity` as "Get user activity log (paginated)". **Nothing in the monorepo writes `user_activities`** - no service inserts into it, and the only references are this service's read accessor and the index added in #68. So the endpoint returns an empty list for every user, and the GDPR export's `activities` array is always empty with `activities_total: 0`.
+- Same shape as file-management#70, a documented feature that silently returns nothing, but a different cause: there the index named absent fields, here the collection is never populated.
+
+### Bearing on two recent changes, stated plainly
+- **#61** made the export disclose truncation and report a failed activity query rather than an empty one. The reasoning holds; its practical effect is nil while there is nothing to truncate or fail on.
+- **#68** added `{user_id: 1, timestamp: -1}`. Correctly shaped for the queries, and currently indexing a permanently empty collection.
+- Neither was wrong, and neither could have surfaced this: both concerned the read path, which is coherent. Only asking *who writes this* does.
+
+### Not implemented
+- Which events belong in an activity log, and which service records them, is a product decision - auth-service (logins), projects-api (project changes) and this service (profile updates) are all plausible. Picking one silently would be worse than the gap being visible.
+
+### Verification
+- RED first, once the writer check was tightened. The first version reported a writer that does not exist: it tested whether `impls.rs` contained both `user_activities` and `insert_one` anywhere, and that file inserts into `users`. It now requires an insert following the activities accessor.
+- Mutations both ways: restoring the old wording fails, and introducing a writer makes the claim permissible again - so the guard tracks claim-against-reality rather than banning the words. Full suite passes.
+
 ## 2026-08-14 - user_activities had no indexes: activity listing scanned and sorted in memory (#68)
 
 ### Fixed
