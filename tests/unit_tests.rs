@@ -630,36 +630,56 @@ mod role_permissions_tests {
 
 #[cfg(test)]
 mod sort_order_validation_tests {
-    // Tests for the sorting logic used in admin_search_users handler
+    //! Real specs for `build_sort_doc` (#59). The previous three tests here
+    //! asserted their own local literals (an array contains its own
+    //! elements; a locally recomputed ternary equals itself) - they could
+    //! never fail and touched no production code, while their array
+    //! documented exactly the allowlist nobody had implemented.
+    use mongodb::bson::doc;
+    use user_service::handlers::helpers::build_sort_doc;
 
     #[test]
-    fn test_valid_sort_fields() {
-        let valid_sorts = ["name", "email", "role", "createdAt", "updatedAt"];
-        for field in &valid_sorts {
-            assert!(valid_sorts.contains(field));
+    fn allowlisted_fields_sort_by_name() {
+        for field in ["name", "email", "role", "updatedAt"] {
+            assert_eq!(
+                build_sort_doc(Some(field), None),
+                doc! { field: -1 },
+                "{field} descending"
+            );
+            assert_eq!(
+                build_sort_doc(Some(field), Some("asc")),
+                doc! { field: 1 },
+                "{field} ascending"
+            );
         }
     }
 
+    /// The users collection holds mixed createdAt shapes (#28), and MongoDB
+    /// sorts across BSON types by type bracket before value, so a createdAt
+    /// sort partitions by write era. `_id` is type-uniform and embeds the
+    /// creation timestamp - it is the real creation order.
     #[test]
-    fn test_sort_order_values() {
-        let order_asc = "asc";
-        let order_desc = "desc";
-        let sort_value_asc: i32 = if order_asc == "desc" { -1 } else { 1 };
-        let sort_value_desc: i32 = if order_desc == "desc" { -1 } else { 1 };
-        assert_eq!(sort_value_asc, 1);
-        assert_eq!(sort_value_desc, -1);
+    fn created_at_and_default_sort_creation_order_by_id() {
+        assert_eq!(build_sort_doc(None, None), doc! { "_id": -1 });
+        assert_eq!(
+            build_sort_doc(Some("createdAt"), Some("asc")),
+            doc! { "_id": 1 }
+        );
     }
 
+    /// The sort field comes off the query string. The response projection
+    /// hides password/resetToken, but sorting BY them is an ordering oracle
+    /// on the hidden values; a nonexistent field silently serves natural
+    /// order while looking sorted (#59).
     #[test]
-    #[allow(clippy::unnecessary_literal_unwrap)]
-    fn test_default_sort_is_created_at_desc() {
-        // Mirrors handler defaults: query.sort.unwrap_or("createdAt"), query.order.unwrap_or("desc")
-        let sort_opt: Option<String> = None;
-        let order_opt: Option<String> = None;
-        let sort = sort_opt.unwrap_or_else(|| "createdAt".to_string());
-        let order = order_opt.unwrap_or_else(|| "desc".to_string());
-        assert_eq!(sort, "createdAt");
-        assert_eq!(order, "desc");
+    fn unknown_and_hostile_fields_fall_back_to_creation_order() {
+        for hostile in ["password", "resetToken", "verificationToken", "noSuchField"] {
+            assert_eq!(
+                build_sort_doc(Some(hostile), None),
+                doc! { "_id": -1 },
+                "{hostile} reached the sort stage"
+            );
+        }
     }
 }
 
