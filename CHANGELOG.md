@@ -1,3 +1,17 @@
+## 2026-08-14 - Cache invalidation always reported success, making its stale-data warning unreachable (#64)
+
+### Fixed
+- `invalidate_profile_cache` and `invalidate_settings_cache` returned `Ok(())` unconditionally. Both layers could fail silently - an unreachable Redis, a discarded `DEL` result, or a poisoned LRU mutex - and the caller was still told the invalidation had succeeded.
+- `impls.rs` has `warn_if_cache_failed(..., stale: true)` wrapping both, whose message is exactly right about the consequence: "stale data will be served until the entry expires". It could never print, because neither function could return an `Err`. The branch was written for this situation and was unreachable from the day it landed.
+- The LRU eviction now goes through `pop_recovering`, which recovers a poisoned lock and completes. Reads consult the LRU before Redis, so a skipped eviction there outranks a stale entry in Redis, and the cached `StandardizedUser` carries `role` and `is_active` - fields that `admin_update_user` and `update_user_role` exist to change. A demotion or deactivation could appear applied while the previous value kept being served.
+- Redis failures propagate instead of being discarded, so the existing warning is now reachable.
+
+### Unchanged on purpose
+- `get_cached_profile` and `get_cached_settings` still treat a poisoned lock as a miss. That is the safe direction: it falls through to the database rather than serving a value from a map whose state is in doubt, matching auth-service#65. The source-level test is scoped to the two invalidation bodies for this reason - the rule is about evictions, not about locks in general.
+
+### Verification
+- RED first, by the compiler: the tests named `pop_recovering` before it existed. The LRU caches are `lazy_static` globals and **poisoning one inside a test poisons it for the whole test binary**, so the recovery is exercised against a local mutex through the helper rather than by poisoning `PROFILE_CACHE`. Mutations: reverting the helper to `if let Ok` leaves the stale entry and fails, and reverting either invalidation to skip the helper fails the source-level test by name. 225 lib tests pass, clippy clean.
+
 ## 2026-08-13 - GDPR export: silent truncation at 100, and a failed query exported as an empty history (#61)
 
 ### Fixed
