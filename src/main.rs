@@ -84,7 +84,53 @@ async fn create_database_indexes() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
+    // `user_activities` is the other collection this service uses, and it had
+    // no index at all (#68) - the call above is bound to `users`, which is how
+    // it was missed. Both queries against it filter on `user_id` and sort by
+    // `timestamp: -1` (the activity endpoint and the GDPR export), so without
+    // this they scan the collection *and* sort in memory. The in-memory sort
+    // has a hard 32 MB limit, past which the query fails rather than slows.
+    //
+    // ESR order: equality field first, then the sort field, so one index
+    // serves both.
+    let activities = db.collection::<Document>(activities_collection());
+    let activity_index = mongodb::IndexModel::builder()
+        .keys(mongodb::bson::doc! { "user_id": 1, "timestamp": -1 })
+        .options(
+            mongodb::options::IndexOptions::builder()
+                .name("user_id_timestamp_idx".to_string())
+                .build(),
+        )
+        .build();
+
+    match activities.create_indexes(vec![activity_index], None).await {
+        Ok(result) => {
+            for index_name in result.index_names {
+                log::info!("  Activity index created: {}", index_name);
+            }
+        }
+        Err(e) => {
+            if user_service::utils::is_index_conflict(&e.to_string()) {
+                log::info!("Activity indexes already exist (this is normal)");
+            } else {
+                log::warn!(
+                    "Failed to create activity indexes: {} (service will still work, \
+                     but activity listing scans and sorts in memory)",
+                    e
+                );
+            }
+        }
+    }
+
     Ok(())
+}
+
+/// The collection the activity queries run against.
+///
+/// Named once so the index and the queries cannot drift apart; `impls.rs`
+/// opens the same name.
+pub fn activities_collection() -> &'static str {
+    "user_activities"
 }
 
 #[actix_web::main]
