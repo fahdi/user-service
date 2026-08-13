@@ -156,19 +156,38 @@ pub async fn cache_profile(
     Ok(())
 }
 
+/// Evict `key`, recovering the lock if a panic elsewhere poisoned it (#64).
+///
+/// The eviction used to sit behind `if let Ok(mut cache) = CACHE.lock()`, so a
+/// poisoned lock skipped it while the caller was told the invalidation
+/// succeeded. Reads consult this LRU before Redis, so a skipped eviction keeps
+/// serving the previous value - and the cached profile carries `role` and
+/// `is_active`, which `admin_update_user` and `update_user_role` change.
+///
+/// Recovering is safe for this value: it is a cache, and dropping an eviction
+/// is strictly worse than acting on a map whose last write may have been
+/// interrupted. Returns whether an entry was actually removed.
+fn pop_recovering<V>(cache: &Mutex<LruCache<String, V>>, key: &str) -> bool {
+    let mut guard = cache.lock().unwrap_or_else(|poisoned| {
+        log::error!("cache lock poisoned; recovering to complete the eviction of {key}");
+        poisoned.into_inner()
+    });
+    guard.pop(key).is_some()
+}
+
 // Invalidate user profile cache
 pub async fn invalidate_profile_cache(
     cache_key: &str,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    // Remove from Redis
-    if let Ok(mut conn) = get_redis_connection().await {
-        let _: Result<i32, redis::RedisError> = conn.del(cache_key).await;
-    }
+    // The LRU is cleared first and unconditionally: it is the layer reads
+    // consult first, so a stale entry here outranks a stale entry in Redis.
+    pop_recovering(&PROFILE_CACHE, cache_key);
 
-    // Remove from LRU cache
-    if let Ok(mut cache) = PROFILE_CACHE.lock() {
-        cache.pop(cache_key);
-    }
+    // Redis failures are reported rather than discarded. warn_if_cache_failed
+    // already has the right message for this ("stale data will be served until
+    // the entry expires"); it just never received an Err to print.
+    let mut conn = get_redis_connection().await?;
+    conn.del::<_, i32>(cache_key).await?;
 
     Ok(())
 }
@@ -222,15 +241,105 @@ pub async fn cache_settings(
 pub async fn invalidate_settings_cache(
     cache_key: &str,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    // Remove from Redis
-    if let Ok(mut conn) = get_redis_connection().await {
-        let _: Result<i32, redis::RedisError> = conn.del(cache_key).await;
-    }
+    pop_recovering(&SETTINGS_CACHE, cache_key);
 
-    // Remove from LRU cache
-    if let Ok(mut cache) = SETTINGS_CACHE.lock() {
-        cache.pop(cache_key);
-    }
+    let mut conn = get_redis_connection().await?;
+    conn.del::<_, i32>(cache_key).await?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod invalidation_tests {
+    //! Both invalidation functions returned Ok(()) whatever happened (#64), so
+    //! `warn_if_cache_failed`'s `stale: true` branch - written for exactly this
+    //! case, and correct about the consequence - could never be reached.
+    //!
+    //! The LRU caches are `lazy_static` globals shared by every test in this
+    //! binary, and poisoning a global Mutex poisons it for the whole run. So
+    //! the recovery is tested through `pop_recovering` against a local mutex
+    //! rather than by poisoning PROFILE_CACHE itself.
+
+    use super::*;
+    use std::sync::Arc;
+
+    fn poisoned_cache() -> Arc<Mutex<LruCache<String, u32>>> {
+        let cache = Arc::new(Mutex::new(LruCache::new(NonZeroUsize::new(4).unwrap())));
+        cache.lock().unwrap().put("victim".to_string(), 1);
+
+        let clone = Arc::clone(&cache);
+        let _ = std::thread::spawn(move || {
+            let _guard = clone.lock().unwrap();
+            panic!("poisoning the cache lock on purpose");
+        })
+        .join();
+
+        assert!(cache.lock().is_err(), "expected a poisoned lock");
+        cache
+    }
+
+    /// An eviction that is silently skipped leaves the stale role or
+    /// is_active being served, because reads consult the LRU first.
+    #[test]
+    fn an_eviction_completes_even_when_the_lock_is_poisoned() {
+        let cache = poisoned_cache();
+        let evicted = pop_recovering(&cache, "victim");
+
+        assert!(evicted, "the entry should have been present and removed");
+        assert!(
+            cache
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .peek("victim")
+                .is_none(),
+            "the stale entry survived the eviction"
+        );
+    }
+
+    #[test]
+    fn evicting_an_absent_key_reports_that_nothing_was_removed() {
+        let cache = poisoned_cache();
+        assert!(!pop_recovering(&cache, "never-cached"));
+    }
+
+    /// The helper only matters if the invalidation paths use it, and the
+    /// Redis result only matters if it is not discarded.
+    #[test]
+    fn invalidation_neither_skips_the_lru_nor_discards_the_redis_result() {
+        let source = include_str!("cache_service.rs");
+        let body = source
+            .split("#[cfg(test)]")
+            .next()
+            .expect("the file has a non-test portion");
+
+        // Scoped to the two invalidation bodies. The read and populate paths
+        // between them use `if let Ok` on purpose: a poisoned lock there means
+        // a miss, which falls through to the database and is the safe
+        // direction. The rule is about evictions, not about locks in general.
+        let body_of = |name: &str| -> String {
+            let start = body.find(name).unwrap_or_else(|| panic!("{name} exists"));
+            let rest = &body[start..];
+            let end = rest.find("\n}\n").expect("the function terminates");
+            rest[..end].to_string()
+        };
+
+        for name in [
+            "pub async fn invalidate_profile_cache",
+            "pub async fn invalidate_settings_cache",
+        ] {
+            let fn_body = body_of(name);
+            assert!(
+                !fn_body.contains("if let Ok(mut cache) ="),
+                "{name} still skips the LRU eviction when the lock is poisoned"
+            );
+            assert!(
+                !fn_body.contains("let _: Result<i32, redis::RedisError>"),
+                "{name} still discards the Redis result, so the caller cannot warn"
+            );
+            assert!(
+                fn_body.contains("pop_recovering"),
+                "{name} does not go through the recovering eviction"
+            );
+        }
+    }
 }
