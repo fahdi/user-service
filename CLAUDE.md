@@ -75,7 +75,6 @@ src/
 - **Global connection pools**: `lazy_static!` for `REDIS_POOL`, `MONGODB_CLIENT`, `USER_CACHE` -- follows auth-service patterns
 - **Image processing**: Profile pictures processed with `image` crate (resize 400x400, crop 200x200 center, JPEG 90% quality)
 - **Google Drive storage**: Profile pictures uploaded to user-specific Drive folders, made publicly readable
-- **simd-json optimization**: `optimize_json_response()` uses simd-json with serde_json fallback
 - **Database indexes**: Created on startup (email unique, profilePicture sparse, updatedAt desc)
 - **No rate limiting**: this service has none; abuse throttling happens at auth-service's per-endpoint limits. (A never-compiled Transform implementation was removed in #26.)
 - **DI traits**: `UserRepository`, `CacheService`, `FileUploader`, `AuthExtractor` in `traits.rs` for testable handlers (fully wired via AppState in main.rs with concrete impls)
@@ -110,7 +109,6 @@ cargo clippy       # Zero warnings required
 - **image 0.24**: Profile picture processing (resize, crop, JPEG encode)
 - **reqwest 0.11**: Google Drive API HTTP client
 - **validator 0.16**: Input validation with derive macros
-- **simd-json 0.13**: Fast JSON serialization with serde_json fallback
 - **jsonwebtoken 9.3**: JWT validation (HS256)
 - **lazy_static**: Global static pools and caches
 
