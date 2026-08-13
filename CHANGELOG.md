@@ -1,4 +1,17 @@
 ## 2026-08-14 - simd-json was compiled in for a function nothing called (#66)
+## 2026-08-14 - user_activities had no indexes: activity listing scanned and sorted in memory (#68)
+
+### Fixed
+- `main.rs` built four indexes and created them with `users.create_indexes(...)`, so every one landed on **users**. The other collection this service uses, `user_activities`, had none - and the call being bound to one collection is exactly how it was missed.
+- Both queries against it filter on `user_id` and sort by `timestamp: -1`: `GET /api/users/activity` and `GET /api/users/export`. Added `{user_id: 1, timestamp: -1}` in ESR order, so one index serves the filter and supplies the ordering.
+
+### Why this one had a sharp failure mode rather than a gradual one
+- The unindexed filter meant a scan of the most write-heavy collection in the service, which grows with every recorded action and has no retention. The unindexed **sort** was the more serious half: MongoDB sorts in memory when no index provides the order, with a hard **32 MB limit**, past which the query fails outright with `Sort exceeded memory limit`. So the activity page and the GDPR export both had a cliff rather than a slope - and the export is what a user invokes to exercise a data-protection right.
+
+### Verification
+- The guard was written after the fix rather than before, so the **mutations are the verification**, not a prior red. Both caught: reversing the key order so `timestamp` leads (which would serve neither query), and changing the creation target back to `users` so the index is declared but never created on the right collection. A fifth test pins that `main.rs` and `impls.rs` name the same collection, so the index cannot be orphaned by a rename.
+- Full suite passes, clippy clean.
+
 
 ### Removed
 - `optimize_json_response` in `lib.rs` had **zero references anywhere** - no handler, no test, no feature flag. Every response this service returns is serialized by actix-web's `Json` through serde_json, and always has been. The function, the `simd-json 0.13` dependency it existed to use, and the now-unused `serde::Serialize` import are gone.
