@@ -1404,8 +1404,12 @@ mod export_tests {
     #[actix_web::test]
     async fn test_export_discloses_that_the_history_was_truncated() {
         let oid = test_oid();
-        let mut repo =
-            MockUserRepo::new().with_user(make_user_doc(oid, "alice@test.com", "Alice", "customer"));
+        let mut repo = MockUserRepo::new().with_user(make_user_doc(
+            oid,
+            "alice@test.com",
+            "Alice",
+            "customer",
+        ));
         for i in 0..150 {
             repo = repo.with_activity(doc! {
                 // _id is required: standardize_activity_doc rejects a document
@@ -2030,7 +2034,11 @@ mod route_table_tests {
 
         vec![
             ("GET", "/api/users/profile".into(), None),
-            ("POST", "/api/users/profile-picture".into(), Some(json!({ "image": "x" }))),
+            (
+                "POST",
+                "/api/users/profile-picture".into(),
+                Some(json!({ "image": "x" })),
+            ),
             ("DELETE", "/api/users/avatar".into(), None),
             ("GET", "/api/users/settings".into(), None),
             ("PUT", "/api/users/settings".into(), Some(settings)),

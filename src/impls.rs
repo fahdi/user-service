@@ -60,7 +60,9 @@ fn warn_if_cache_failed<E: std::fmt::Display>(
         if stale {
             log::warn!("cache {operation} failed for {key}: {e} - stale data will be served until the entry expires");
         } else {
-            log::warn!("cache {operation} failed for {key}: {e} - reads will fall through to the database");
+            log::warn!(
+                "cache {operation} failed for {key}: {e} - reads will fall through to the database"
+            );
         }
     }
 }

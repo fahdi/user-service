@@ -406,9 +406,8 @@ mod auth_client_reuse_tests {
                         if n == 0 {
                             break;
                         }
-                        let _ = s.write_all(
-                            b"HTTP/1.1 401 Unauthorized\r\nContent-Length: 2\r\n\r\n{}",
-                        );
+                        let _ = s
+                            .write_all(b"HTTP/1.1 401 Unauthorized\r\nContent-Length: 2\r\n\r\n{}");
                         let _ = s.flush();
                     }
                 });

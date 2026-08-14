@@ -1,3 +1,10 @@
+## 2026-08-14 - cargo fmt, to unblock the CI gate
+
+### Fixed
+- `cargo fmt --all -- --check` is the **first** step of this service's `Test` workflow, and it was failing, so `cargo clippy` and `cargo test` never ran on any push. Every one of the fleet's eight Rust services was in the same state.
+- Nobody saw it: GitHub Actions has been refusing to start jobs since 2026-08-12 on a billing failure (super#180), so the run is reported as failed without the formatting error ever being printed. The one service whose job did start (user-service) shows the real cause: `X cargo fmt --check`, with clippy and test skipped.
+- 6 files reformatted here. No behaviour change: `cargo clippy --all-targets -- -D warnings` and `cargo test --no-fail-fast` are both clean before and after.
+
 ## 2026-08-14 - Vestigial integration_tests.rs deleted; the real handler suite named (#75)
 
 ### Nothing was unguarded
