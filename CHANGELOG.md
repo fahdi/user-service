@@ -1,3 +1,24 @@
+## 2026-08-14 - the auth-before-validation guard covered 1 of the 4 handlers it was written for (#80)
+
+### Fixed
+- `authentication_precedes_body_validation` sent a single request, to `change-password`. #45 named **four** handlers; `update_settings`, `update_user_role` and `admin_update_user` had no ordering guard at all.
+- Now parameterised over all four routes from #45.
+
+### The gap was measured, not assumed
+Moving `body.validate()` back above `extract_claims` in `update_user_role` - which hands an unauthenticated caller the valid role vocabulary - left **the entire 453-test suite green**. That is what a missing guard looks like from the inside.
+
+### Why the neighbouring tests do not cover it
+- `every_protected_route_answers_401_without_credentials` (#44) sends **valid** payloads, so validation succeeds and the handler reaches its auth check under either ordering. Its doc comment hands this case to the ordering test explicitly.
+- `routed_handlers_authenticate` (#57) is source-level and asserts an `extract_claims` call is **present**. Presence is not order.
+
+### The payloads carry a proof obligation
+A body that fails to *deserialize* answers 400 from the Actix extractor before any handler code runs, so it would satisfy a 401-vs-400 assertion for a reason unrelated to ordering. Each case now deserializes its payload into the handler's own request type and asserts `validate()` rejects it, so a payload that stops being a validation failure fails the test loudly instead of quietly testing nothing.
+
+### Verification
+- Each of the four handlers mutated **individually**; every mutation failed the test naming its own handler and route. Restored, green.
+- 453 tests, `cargo clippy --all-targets -- -D warnings` clean, `cargo fmt --check` clean.
+- This service is the fleet's only public repo and so the only one whose CI still executes, so this change is genuinely CI-verifiable (super#180).
+
 ## 2026-08-14 - cargo fmt, to unblock the CI gate
 
 ### Fixed
