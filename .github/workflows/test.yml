@@ -6,6 +6,13 @@ on:
   pull_request:
     branches: [main]
 
+# Cancel superseded runs on branches so an abandoned push does not burn a
+# full Rust build (infra#125). Never on main: that run is the record of
+# whether the merged state is good, and a later merge must not abandon it.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
