@@ -51,22 +51,39 @@ struct ValidateResponse {
 /// value matters less than there being one.
 const AUTH_SERVICE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
+/// Built once for the process, not per request (super#182).
+///
+/// A `reqwest::Client` owns its connection pool, so constructing one per call
+/// discarded the pool immediately and every authenticated request opened a new
+/// TCP connection to auth-service. Measured in projects-api with a counting
+/// listener: 8 requests made 8 connections with a fresh client and 1 shared.
+///
+/// The timeout is the same bound the fleet added when an unbounded client made
+/// the `Unavailable` fallback unreachable; a shared client carries it equally.
+/// `Option` rather than `expect` so a build failure keeps the
+/// availability-preserving path instead of aborting at first use.
+static AUTH_SERVICE_CLIENT: std::sync::LazyLock<Option<reqwest::Client>> =
+    std::sync::LazyLock::new(|| {
+        reqwest::Client::builder()
+            .timeout(AUTH_SERVICE_TIMEOUT)
+            .build()
+            .map_err(|e| log::error!("Failed to build auth-service client: {}", e))
+            .ok()
+    });
+
 async fn verify_with_auth_service(auth_service_url: &str, token: &str) -> RemoteValidation {
     // Bounded on purpose. `reqwest::Client::new()` sets no timeout at all, so
     // an unanswered request fell through to the OS TCP timeout. That made the
     // `Unavailable` fallback below unreachable when auth-service *hangs* as
     // opposed to refusing: `send()` never returns, so the arm that preserves
     // availability never runs (#49).
-    let client = match reqwest::Client::builder()
-        .timeout(AUTH_SERVICE_TIMEOUT)
-        .build()
-    {
-        Ok(client) => client,
+    let client = match AUTH_SERVICE_CLIENT.as_ref() {
+        Some(client) => client,
         // Building a client with only a timeout set should not fail. If it
         // does, that is this service's problem, not a verdict on the token, so
         // it takes the same path as an unreachable auth-service.
-        Err(e) => {
-            log::error!("Failed to build auth-service client: {}", e);
+        None => {
+            log::error!("auth-service client could not be built");
             return RemoteValidation::Unavailable;
         }
     };
@@ -353,5 +370,74 @@ mod tests {
             &build_validation(),
         );
         assert!(result.is_err());
+    }
+}
+
+#[cfg(test)]
+mod auth_client_reuse_tests {
+    //! The auth-service client must be shared across requests (super#182).
+    //!
+    //! A `reqwest::Client` owns its connection pool, so building one per call
+    //! discarded the pool immediately: every authenticated request opened a
+    //! new TCP connection to auth-service.
+    use super::*;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+
+    /// Counts accepted connections and answers keep-alive, so the test
+    /// measures pooling rather than server behaviour.
+    fn counting_server() -> (String, Arc<AtomicUsize>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = format!("http://{}", listener.local_addr().unwrap());
+        let accepts = Arc::new(AtomicUsize::new(0));
+        let counter = Arc::clone(&accepts);
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let mut s = match stream {
+                    Ok(s) => s,
+                    Err(_) => break,
+                };
+                counter.fetch_add(1, Ordering::SeqCst);
+                std::thread::spawn(move || {
+                    let mut buf = [0u8; 2048];
+                    while let Ok(n) = s.read(&mut buf) {
+                        if n == 0 {
+                            break;
+                        }
+                        let _ = s.write_all(
+                            b"HTTP/1.1 401 Unauthorized\r\nContent-Length: 2\r\n\r\n{}",
+                        );
+                        let _ = s.flush();
+                    }
+                });
+            }
+        });
+        (addr, accepts)
+    }
+
+    #[tokio::test]
+    async fn repeated_validations_reuse_one_connection() {
+        let (addr, accepts) = counting_server();
+
+        for _ in 0..6 {
+            let _ = verify_with_auth_service(&addr, "any-token").await;
+        }
+
+        let connections = accepts.load(Ordering::SeqCst);
+        assert_eq!(
+            connections, 1,
+            "six validations should share one pooled connection, opened {connections}. \
+             A client built per call discards its pool immediately (super#182)"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_shared_client_exists() {
+        assert!(
+            AUTH_SERVICE_CLIENT.is_some(),
+            "the shared client must build successfully"
+        );
     }
 }

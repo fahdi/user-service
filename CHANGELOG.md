@@ -1,5 +1,21 @@
 ## 2026-08-14 - simd-json was compiled in for a function nothing called (#66)
 
+## 2026-08-14 - The auth path built a new HTTP client per request (super#182)
+
+### Fixed
+- `verify_with_auth_service` constructed its `reqwest::Client` inside the function, and the auth path calls it on every authenticated request. A `Client` owns its connection pool, so a fresh one per call discarded the pool immediately: keep-alive never applied and each request opened a new TCP connection to auth-service.
+- Measured in projects-api with a listener counting accepted connections: 8 requests made **8** connections with a fresh client and **1** with a shared one. The regression test added here reports `opened 6` for six validations against the old code.
+- Now a `LazyLock<Option<reqwest::Client>>` built once for the process.
+
+### How it got there
+- The builder was introduced to bound the call: an unbounded client made the `Unavailable` fallback unreachable when auth-service hung rather than refused. That fix was correct, and moving construction into the per-request path was an unintended side effect of it. A shared client carries the same timeout.
+
+### Behaviour preserved
+- `Option` rather than `expect`: a build failure still returns `RemoteValidation::Unavailable`, keeping it a statement about this service rather than a verdict on the token, and a static's first use cannot abort the process.
+
+### Verification
+- Mutation: reverting to a per-call client fails the reuse test. The test counts real TCP accepts against a keep-alive listener rather than mocking the pool. Full suite passes, clippy clean.
+
 ## 2026-08-14 - crossbeam-epoch 0.9.18 carried RUSTSEC-2026-0204 (#72)
 
 ### Fixed
