@@ -1,3 +1,26 @@
+## 2026-08-14 - Vestigial integration_tests.rs deleted; the real handler suite named (#75)
+
+### Nothing was unguarded
+This is the fourth file examined in the sweep that began with projects-api#72, and the first where **the answer was "no defect"**. Verified before writing anything: every one of the 12 handlers that exists in production is imported and exercised for real by `tests/di_integration_tests.rs`, and the health endpoint's 503-on-database-failure contract is pinned by `health_tests::unreachable_database_is_a_503`.
+
+That coverage was mutation-checked rather than assumed: making `health` return 200 regardless of `database_reachable` fails that test. It is real coverage, not another decoy.
+
+### Removed
+- `tests/integration_tests.rs`, 59 lines. Four of its five tests contained **no assertion at all** - `let _ = serde_json::json!(..)` under comments reading "Tests moved to user_endpoint_tests.rs — verify crate compiles". `test_compilation`'s comment claimed it exercised "a lib import" and it imported nothing from the lib.
+- The fifth, `test_health_endpoint`, defined a `health_handler` **inside the test file** that unconditionally returned `"healthy"`, mounted it, and asserted it returned `"healthy"`.
+- That last one was actively misleading **in this service specifically**: the real handler (`src/lib.rs`) returns **503** with `"status": "unhealthy"` when MongoDB is unreachable, and the comment above it records why the code matters - `monitor-containers.sh` reads only the status code, so a 200 carrying `"unhealthy"` is invisible. A reader who found a passing `test_health_endpoint` had no reason to go looking for the test that pins the contract that matters.
+
+### Recorded
+- `CLAUDE.md` now names which suite exercises production: `di_integration_tests.rs` imports from `user_service::handlers::di_handlers`; `handler_integration_tests.rs` is 3038 lines that define **13 handlers locally**, mirroring the production set by name, and test those copies.
+- That duplication is redundancy rather than a gap - every production equivalent is covered - but a copy of the handler layer will drift from it, and the filename does not say which of the two is authoritative. What to do with 3038 lines of existing work is a judgement call, so it is recorded in #75 rather than acted on here.
+
+### No new guard, deliberately
+The behaviours involved are already pinned, and mutation-checked above. A guard here would be ceremony rather than protection, so none was added.
+
+### Verification
+- `cargo test` green across all binaries after the deletion; the health contract test still passes and still fails under mutation.
+- `cargo clippy --all-targets -- -D warnings` clean.
+
 ## 2026-08-14 - simd-json was compiled in for a function nothing called (#66)
 
 ## 2026-08-14 - The auth path built a new HTTP client per request (super#182)
