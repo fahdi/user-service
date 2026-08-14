@@ -115,7 +115,9 @@ cargo clippy       # Zero warnings required
 ## Testing
 
 - ~441 tests (exact count lives in CI) across unit, DI integration, and endpoint/security suites
-- DI integration tests (`tests/di_integration_tests.rs`): test all 13 endpoints via trait-based mocks
+- **`tests/di_integration_tests.rs` is the suite that exercises production handlers.** It imports them from `user_service::handlers::di_handlers` and drives all 13 endpoints through trait-based mocks. If you are checking whether a handler's behaviour is actually pinned, this is the file to read.
+- **`tests/handler_integration_tests.rs` does not.** It is 3038 lines that define **13 handlers locally**, mirroring the production set by name, and test those copies; its crate imports are models, traits and one helper, not the handlers under test. Every production equivalent is covered in `di_integration_tests.rs`, so this is redundancy rather than a gap - but a copy of the handler layer will drift from it, and the filename does not say which of the two is authoritative (#75).
+- `tests/integration_tests.rs` was deleted in #75: four of its five tests contained no assertion (`let _ = serde_json::json!(..)` under comments saying "verify crate compiles"), and the fifth defined a `health_handler` inside the test file that always returned `"healthy"` and asserted it returned `"healthy"`. That was actively misleading here, because the real handler returns **503** when MongoDB is unreachable and a passing `test_health_endpoint` gave no reason to look for the test that pins it (`health_tests::unreachable_database_is_a_503`).
 - `mockall 0.13` available for trait mocking
 - Security tests: password generation uniqueness, email validation edge cases, regex escaping
 - Auth tests: Claims serialization with camelCase field renames
