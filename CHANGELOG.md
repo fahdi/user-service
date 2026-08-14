@@ -1,4 +1,25 @@
 ## 2026-08-14 - simd-json was compiled in for a function nothing called (#66)
+
+## 2026-08-14 - crossbeam-epoch 0.9.18 carried RUSTSEC-2026-0204 (#72)
+
+### Fixed
+- `cargo update -p crossbeam-epoch` moves the lock from 0.9.18 to 0.9.20, clearing **RUSTSEC-2026-0204**, an invalid pointer dereference in the `fmt::Pointer` impl for `Atomic`/`Shared`. The advisory is patched in >= 0.9.20, which is semver-compatible with the resolved `^0.9`, so this is a two-line lockfile change with no `Cargo.toml` edit.
+- Reached transitively through `crossbeam-deque` → `rayon-core` → `exr` → `image`, and `image` is a direct dependency here for profile-picture processing.
+- The Dockerfile builds `--locked` (infra#49), so `Cargo.lock` is what ships. The advisory was in the deployed artifact until the lock moved.
+
+### Audit count
+- 6 vulnerabilities → 5.
+
+### The remaining five are not fixable by a lockfile bump
+- `idna 0.2.3` and `rustls-webpki 0.101.7` (three advisories) come from `mongodb 2.8.2` via `trust-dns-proto 0.21.2` and `rustls 0.21.12`; both need major bumps that `mongodb` pins, so they are downstream of super#171 rather than independent.
+- `idna 0.4.0` comes from `validator 0.16.1` and needs `idna >= 1.0.0`.
+
+### Also established while measuring
+- super#177's two CVSS 9.1 criticals are **already fixed**: `lettre` is at 0.11.23 (advisory needs >= 0.11.22) and `hyper` at 0.14.32 (needs >= 0.14.10). No service in the fleet still reports either.
+
+### Verification
+- `cargo audit` before and after, full suite green, `cargo clippy --all-targets` clean. Verified with the local toolchain, since fleet CI has not executed since 2026-08-12 for billing reasons (super#180).
+
 ## 2026-08-14 - The activity log has no writer, so its endpoints can only return empty (#70)
 
 ### Documented
