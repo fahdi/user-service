@@ -1,10 +1,29 @@
-//! Integration tests for all user-service endpoints using trait-based DI.
+//! THE HANDLERS IN THIS FILE ARE LOCAL COPIES. THEY ARE NOT PRODUCTION CODE.
 //!
-//! These tests exercise the actual handler logic (auth extraction, validation,
-//! DB interaction, caching, pagination) by injecting mock implementations of
-//! `UserRepository`, `CacheService`, `FileUploader`, and `AuthExtractor`.
+//! `tests/di_integration_tests.rs` is the file that exercises production
+//! handlers: it imports them from `user_service::handlers::di_handlers` and
+//! drives all 13 endpoints through trait mocks. **If you are checking whether a
+//! handler's behaviour is actually pinned, read that file, not this one.**
 //!
-//! No real MongoDB, Redis, or Google Drive connection is needed.
+//! This one defines 13 handlers of its own (see the `handlers` module below,
+//! whose comments already said "reimplemented from di_handlers.rs" and "mirrors
+//! di_handlers.rs exactly") and mounts those. Its crate imports are models,
+//! traits and one helper - not a single handler under test. **Changing a
+//! production handler cannot fail anything here.**
+//!
+//! The header used to claim the opposite - that these tests drove the real
+//! handlers by injecting mocks - 660 lines away from its own contradiction
+//! (#82). The phrasing is deliberately paraphrased here rather than quoted,
+//! because `handler_copies_are_labelled.rs` searches for that literal wording
+//! and reproducing it, even to disown it, trips the guard. The risk was
+//! concrete: someone auditing whether `change_password` authenticates before
+//! validating - the question behind #45 - could find a thorough-looking test
+//! here and conclude the behaviour was pinned. It is pinned, in a copy.
+//!
+//! What this file is still worth: the copies are a readable specification of
+//! the intended shapes, and they run without MongoDB, Redis or Google Drive.
+//! Whether 3038 mirrored lines earn their keep is an open owner decision (#75);
+//! `handler_copies_are_labelled.rs` keeps the label honest either way.
 
 use std::sync::{Arc, Mutex};
 
