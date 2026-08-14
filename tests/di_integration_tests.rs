@@ -2105,15 +2105,89 @@ mod route_table_tests {
         }
     }
 
-    /// Authentication must come **before** body validation (#45).
+    /// Authentication must come **before** body validation, on every handler
+    /// that validates a body (#45, #80).
     ///
     /// The test above cannot see this: it sends valid payloads, so validation
-    /// succeeds and the handler reaches its auth check either way. This sends a
-    /// body that **deserializes** but **fails validation**, which separates the
+    /// succeeds and the handler reaches its auth check either way. These send
+    /// bodies that **deserialize** but **fail validation**, which separates the
     /// two orders. Auth first answers 401; validation first answers 400 and
-    /// hands an anonymous caller the password policy.
+    /// tells an anonymous caller why.
+    ///
+    /// #45 named four handlers and this guard covered only `change_password`
+    /// (#80). Reordering either role handler leaked the valid role vocabulary
+    /// to an unauthenticated caller with the whole suite still green - measured,
+    /// not assumed.
     #[actix_web::test]
     async fn authentication_precedes_body_validation() {
+        use user_service::models::user::{
+            AdminUserUpdateRequest, PasswordChangeRequest, RoleUpdateRequest, SettingsUpdateRequest,
+        };
+        use validator::Validate;
+
+        /// A body that fails to *deserialize* answers 400 from the extractor,
+        /// before any handler code runs - which would make the assertion below
+        /// pass for a reason that has nothing to do with ordering. Each case
+        /// proves its payload reaches `validate()` and is rejected there.
+        fn deserializes_but_fails_validation<T>(body: &serde_json::Value) -> Result<(), String>
+        where
+            T: serde::de::DeserializeOwned + Validate,
+        {
+            let parsed: T = serde_json::from_value(body.clone()).map_err(|e| {
+                format!("does not deserialize, so it never reaches validate(): {e}")
+            })?;
+            match parsed.validate() {
+                Err(_) => Ok(()),
+                Ok(()) => Err("deserializes and PASSES validation, so 401-vs-400 \
+                               proves nothing about ordering"
+                    .to_string()),
+            }
+        }
+
+        type Prover = fn(&serde_json::Value) -> Result<(), String>;
+
+        // Every route from #45, with an invalid-but-parseable body and the
+        // request type that has to reject it.
+        let cases: [(&str, &str, &str, serde_json::Value, Prover); 4] = [
+            (
+                "change_password",
+                "POST",
+                "/api/users/change-password",
+                // Two Strings; both fail the length rules.
+                json!({ "currentPassword": "", "newPassword": "" }),
+                deserializes_but_fails_validation::<PasswordChangeRequest>,
+            ),
+            (
+                "update_settings",
+                "PUT",
+                "/api/users/settings",
+                // Fully-formed settings; only the theme is outside
+                // light/dark/auto, so the custom validator rejects it.
+                json!({ "settings": {
+                    "notifications": { "email": true, "sound": true, "desktop": true },
+                    "theme": "chartreuse",
+                    "language": "en",
+                    "timezone": "UTC"
+                }}),
+                deserializes_but_fails_validation::<SettingsUpdateRequest>,
+            ),
+            (
+                "update_user_role",
+                "PUT",
+                "/api/users/roles",
+                // Parses as a String; outside admin/customer/editor/subscriber.
+                json!({ "role": "sysadmin" }),
+                deserializes_but_fails_validation::<RoleUpdateRequest>,
+            ),
+            (
+                "admin_update_user",
+                "PUT",
+                "/api/admin/users/507f1f77bcf86cd799439011",
+                json!({ "role": "sysadmin" }),
+                deserializes_but_fails_validation::<AdminUserUpdateRequest>,
+            ),
+        ];
+
         let app = test::init_service(
             App::new()
                 .app_data(rejecting_state())
@@ -2121,20 +2195,26 @@ mod route_table_tests {
         )
         .await;
 
-        // Deserializes as two Strings; fails the length rules.
-        let req = test::TestRequest::post()
-            .uri("/api/users/change-password")
-            .set_json(json!({ "currentPassword": "", "newPassword": "" }))
-            .to_request();
+        for (handler, method, path, body, prove) in cases {
+            prove(&body).unwrap_or_else(|why| {
+                panic!("the {handler} payload cannot test ordering: {why}");
+            });
 
-        let resp = test::call_service(&app, req).await;
+            let req = match method {
+                "POST" => test::TestRequest::post(),
+                "PUT" => test::TestRequest::put(),
+                other => panic!("unhandled method {other}"),
+            };
+            let resp = test::call_service(&app, req.uri(path).set_json(&body).to_request()).await;
 
-        assert_eq!(
-            resp.status().as_u16(),
-            401,
-            "an anonymous caller must be rejected before being told why their \
-             payload is invalid (#45)"
-        );
+            assert_eq!(
+                resp.status().as_u16(),
+                401,
+                "{method} {path} ({handler}) answered {} - an anonymous caller must be \
+                 rejected before being told why their payload is invalid (#45)",
+                resp.status()
+            );
+        }
     }
 
     /// Health is deliberately outside the convention: the container probe sends
