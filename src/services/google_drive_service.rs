@@ -55,7 +55,6 @@ fn upload_client() -> Result<reqwest::Client, reqwest::Error> {
         .build()
 }
 
-
 // Upload profile picture to Google Drive (matches Node.js implementation exactly)
 pub async fn upload_profile_picture(
     user_id: &str,
@@ -123,7 +122,10 @@ pub async fn upload_profile_picture(
 /// Returns `String` rather than the module's boxed error because this is held
 /// across an await: `Box<dyn Error>` is not `Send`, and `upload_profile_picture`
 /// is behind an `#[async_trait]` that requires the future to be.
-async fn ensure_success(response: reqwest::Response, what: &str) -> Result<reqwest::Response, String> {
+async fn ensure_success(
+    response: reqwest::Response,
+    what: &str,
+) -> Result<reqwest::Response, String> {
     let status = response.status();
     if status.is_success() {
         return Ok(response);
@@ -421,8 +423,7 @@ mod bounded_drive_calls {
         Mock::given(method("POST"))
             .and(path("/drive/v3/files"))
             .respond_with(
-                ResponseTemplate::new(200)
-                    .set_body_json(serde_json::json!({ "id": "new-folder" })),
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({ "id": "new-folder" })),
             )
             .mount(&server)
             .await;
@@ -434,7 +435,10 @@ mod bounded_drive_calls {
 
         std::env::remove_var("GOOGLE_DRIVE_API_BASE_URL");
 
-        assert_eq!(result.expect("an empty search is a valid answer"), "new-folder");
+        assert_eq!(
+            result.expect("an empty search is a valid answer"),
+            "new-folder"
+        );
     }
 
     /// And an existing folder is still reused rather than duplicated.
@@ -444,9 +448,10 @@ mod bounded_drive_calls {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/drive/v3/files"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(
-                serde_json::json!({ "files": [{ "id": "existing-folder" }] }),
-            ))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({ "files": [{ "id": "existing-folder" }] })),
+            )
             .mount(&server)
             .await;
 
@@ -457,7 +462,10 @@ mod bounded_drive_calls {
 
         std::env::remove_var("GOOGLE_DRIVE_API_BASE_URL");
 
-        assert_eq!(result.expect("an existing folder must be reused"), "existing-folder");
+        assert_eq!(
+            result.expect("an existing folder must be reused"),
+            "existing-folder"
+        );
     }
 
     /// A rejected sharing request must not report success.

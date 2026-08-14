@@ -824,8 +824,7 @@ mod blacklist_honoring_spec {
             .and(wiremock::matchers::path("/api/auth/validate"))
             .respond_with(
                 // Stands in for "accepts the connection, never answers".
-                wiremock::ResponseTemplate::new(200)
-                    .set_delay(std::time::Duration::from_secs(60)),
+                wiremock::ResponseTemplate::new(200).set_delay(std::time::Duration::from_secs(60)),
             )
             .mount(&server)
             .await;

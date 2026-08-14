@@ -36,7 +36,10 @@ fn the_check_actually_read_the_sources_and_the_doc() {
         "source walk found almost nothing; the check is blind"
     );
     assert!(
-        fs::read_to_string("CLAUDE.md").expect("CLAUDE.md is readable").len() > 1_000,
+        fs::read_to_string("CLAUDE.md")
+            .expect("CLAUDE.md is readable")
+            .len()
+            > 1_000,
         "CLAUDE.md not readable; the check is blind"
     );
 }
