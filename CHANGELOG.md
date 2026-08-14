@@ -1,3 +1,29 @@
+## 2026-08-14 - a test file claimed to drive the real handlers while reimplementing them (#82)
+
+### Fixed
+- `tests/handler_integration_tests.rs` opened by stating it exercised the actual handler logic by injecting mocks. It defines **13 handlers of its own** and mounts those; its crate imports are models, traits and one helper, and not a single handler under test. **Changing a production handler cannot fail anything in that file.**
+- The contradiction was already in the file, 660 lines down: its own comments read "reimplemented from di_handlers.rs" and "mirrors di_handlers.rs exactly". Only the header disagreed, and the header is what a reader meets first.
+
+### Why the claim mattered more than the duplication
+#75 records the redundancy correctly - every production equivalent is exercised for real in `di_integration_tests.rs`, so this is not a coverage gap. The header is a different kind of problem: it is specific, confident and wrong. Someone auditing whether `change_password` authenticates before validating - the question behind #45 - could open this file, find a thorough-looking test of `change_password`, and conclude the behaviour was pinned. It is pinned, in a copy.
+
+Same shape as utilities-forms' CLAUDE.md crediting `sha2` for short codes generated with `rand`, and file-management logging a Redis connection it never made.
+
+### Not deleted
+3038 mirrored lines stay. What to do with them is an owner decision under #75, and the header now says plainly which file is authoritative either way.
+
+### Guard
+`tests/handler_copies_are_labelled.rs`: a `tests/` file defining two or more functions whose names match production handlers must not claim to drive the real ones. Handler names are **read from `di_handlers.rs`** rather than hardcoded, so one added or renamed there is covered without anyone updating a list.
+
+### Two details worth keeping
+- The guard caught **my own replacement header**, because I quoted the old wording verbatim while disowning it. That is correct behaviour - the phrase should not appear - so the new header paraphrases and says why.
+- It asserts it parsed at least 10 handler names. Breaking the parse in `di_handlers.rs` makes it **fail** rather than pass over an empty list.
+
+### Verification
+- Seen RED first, naming the file and counting 12 copies.
+- Mutation-tested both ways: reinstating the claim fails it; breaking the name parse fails it with the anti-vacuity message. Restored, green.
+- 454 tests, `cargo clippy --all-targets -- -D warnings` clean, `cargo fmt --check` clean.
+
 ## 2026-08-14 - the auth-before-validation guard covered 1 of the 4 handlers it was written for (#80)
 
 ### Fixed
