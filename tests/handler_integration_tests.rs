@@ -407,6 +407,16 @@ impl UserRepository for InMemoryRepo {
 
         Ok(result)
     }
+
+    async fn insert_activity(&self, doc: Document) -> RepoResult<String> {
+        let mut activities = self.activities.lock().unwrap();
+        let id = doc
+            .get_object_id("_id")
+            .map(|oid| oid.to_hex())
+            .unwrap_or_else(|_| ObjectId::new().to_hex());
+        activities.push(doc);
+        Ok(id)
+    }
 }
 
 // ============================================================================

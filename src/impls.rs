@@ -195,6 +195,20 @@ impl UserRepository for MongoUserRepository {
         }
         Ok(docs)
     }
+
+    async fn insert_activity(&self, doc: Document) -> RepoResult<String> {
+        let db = self.get_db().await?;
+        let coll = self.activities_collection(&db);
+        let result = coll
+            .insert_one(doc, None)
+            .await
+            .map_err(|e| RepoError(e.to_string()))?;
+        Ok(result
+            .inserted_id
+            .as_object_id()
+            .map(|oid| oid.to_hex())
+            .unwrap_or_default())
+    }
 }
 
 // ---------------------------------------------------------------------------
