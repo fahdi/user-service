@@ -1,3 +1,30 @@
+## 2026-08-15 - user_activities had no writer, so the activity log and the GDPR export were always empty (#70)
+
+### Fixed
+`GET /api/users/activity` read `user_activities`, paginated, sorted, indexed - and nothing in the monorepo ever inserted into it. Every user got an empty list, and the GDPR export's `activities` array was always `[]` with `activities_total: 0`. The read path was correct; there was no write path.
+
+### Scope
+This service now records the events it can state truthfully about its own actions, and nothing else:
+- `profile_updated` / `settings_updated` - `update_settings`, depending on whether `settings.user` (profile fields) was part of the request; `settings_updated` fires on every successful call, since `settings` (preferences) is not optional
+- `password_changed` - `change_password`
+- `avatar_updated` / `avatar_deleted` - `update_profile_picture`, `delete_avatar`
+- `role_changed` - `update_user_role`; and `admin_update_user`, but only when the request actually included a `role` field, and against the target account's id, not the admin's - that handler also changes name/email/active/verified, none of which this service can truthfully call a role change
+
+Project, file, and message events are deliberately out of scope. Recording them here would repeat the coupling that made #110 unfixable - those events belong to the services that own them.
+
+### The failure mode this had to rule out
+An activity log that can fail the request it describes is worse than no activity log - a broken write must not turn a successful password change into a 500. `UserRepository::insert_activity` returns a `Result`, but every call site goes through a `record_activity` helper that only logs the `Err` and returns `()`. Proven with a mock whose `insert_activity` always fails: `change_password` still returns 200 with its normal success body.
+
+### Added
+- `UserRepository::insert_activity(Document) -> RepoResult<String>` (`src/traits.rs`), implemented against the `user_activities` collection in `MongoUserRepository` (`src/impls.rs`) - the collection and its `{user_id: 1, timestamp: -1}` index already existed from #68, just unused.
+- `build_activity_doc(user_id, action)` (`src/handlers/helpers.rs`) - the minimal write shape: `user_id`, `action`, `timestamp`. Deliberately does not populate `resource`, `ip_address`, or `user_agent`; `standardize_activity_doc` already reads those as optional for activity documents that do carry them.
+- `record_activity(&AppState, user_id, action)` (`src/handlers/di_handlers.rs`) - the fire-and-forget wrapper every call site uses.
+
+### Verification
+- RED first: `tests/di_integration_tests.rs::activity_writer_tests` written against the trait method and mock before any handler called it - 7 of 9 new tests failed with the exact expected/actual activity lists.
+- Mutation-tested: removing the `password_changed` call site fails exactly one test (`password_change_records_password_changed`) and no others.
+- 465 tests (up from 454: +9 handler-level, +2 for `build_activity_doc` in `src/handlers/helpers.rs`), `cargo clippy --all-targets -- -D warnings` clean, `cargo fmt --check` clean.
+
 ## 2026-08-14 - a test file claimed to drive the real handlers while reimplementing them (#82)
 
 ### Fixed

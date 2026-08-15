@@ -305,6 +305,21 @@ pub fn build_admin_lookup_filter(
     }
 }
 
+/// Build a `user_activities` write document for one of this service's own
+/// events (#70).
+///
+/// Deliberately minimal: only the fields this service can state truthfully
+/// about its own action - who, what, when. `standardize_activity_doc` also
+/// reads `resource`, `ip_address`, and `user_agent`, but nothing here writes
+/// them, so they come back `None` on read.
+pub fn build_activity_doc(user_id: &str, action: &str) -> Document {
+    doc! {
+        "user_id": user_id,
+        "action": action,
+        "timestamp": mongodb::bson::DateTime::now(),
+    }
+}
+
 /// Build a MongoDB filter for activity logs.
 ///
 /// Supports filtering by action type and date range (RFC 3339).
@@ -639,6 +654,31 @@ mod tests {
         let user_doc = doc! { "_id": oid, "emailVerified": true };
         let user = standardize_user_doc(&user_doc).unwrap();
         assert!(user.email_verified);
+    }
+
+    // -----------------------------------------------------------------------
+    // build_activity_doc
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_build_activity_doc_has_user_id_action_and_timestamp() {
+        let doc = build_activity_doc("user_abc", "password_changed");
+        assert_eq!(doc.get_str("user_id").unwrap(), "user_abc");
+        assert_eq!(doc.get_str("action").unwrap(), "password_changed");
+        assert!(doc.get_datetime("timestamp").is_ok());
+    }
+
+    #[test]
+    fn test_build_activity_doc_round_trips_through_standardize() {
+        // What gets written must be readable by the same conversion the GET
+        // and export endpoints already use.
+        let mut doc = build_activity_doc("user_abc", "role_changed");
+        doc.insert("_id", ObjectId::new());
+
+        let activity = standardize_activity_doc(&doc).unwrap();
+        assert_eq!(activity.user_id, "user_abc");
+        assert_eq!(activity.action, "role_changed");
+        assert!(activity.resource.is_none());
     }
 
     // -----------------------------------------------------------------------

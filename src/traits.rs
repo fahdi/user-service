@@ -78,6 +78,13 @@ pub trait UserRepository: Send + Sync {
         skip: Option<u64>,
         limit: Option<i64>,
     ) -> RepoResult<Vec<Document>>;
+
+    /// Insert a single activity document. Returns the inserted id as hex string.
+    ///
+    /// Callers must never let an `Err` from this method fail the request that
+    /// produced it (#70) - the event being logged already happened and already
+    /// succeeded; a broken activity log must not turn that into a 500.
+    async fn insert_activity(&self, doc: Document) -> RepoResult<String>;
 }
 
 // ---------------------------------------------------------------------------

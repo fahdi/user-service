@@ -8,7 +8,7 @@ User profile management, settings, avatar uploads, roles, and admin operations w
 - **Port**: 8083 (env: `PORT`, default code says 8081 but Dockerfile exposes 8083)
 - **Database**: MongoDB (`isupercoder` db, collections: `users`, `activities`)
 - **Cache**: Redis (deadpool-redis) + in-memory LRU (500 profiles, 300 settings)
-- **Tests**: ~441 tests (exact count lives in CI)
+- **Tests**: ~465 tests (exact count lives in CI)
 
 ## Architecture
 
@@ -59,7 +59,7 @@ src/
 ### Roles & Activity
 - `GET  /api/users/roles` -- Get user role definitions and permissions
 - `PUT  /api/users/roles` -- Update user role (admin only)
-- `GET  /api/users/activity` -- Reads the `user_activities` collection, paginated. **Nothing writes that collection** - no service in the monorepo inserts into it - so this returns an empty list for every user, and the GDPR export's `activities` array is always empty with `activities_total: 0`. Which events belong in an activity log, and which service records them, is an open product decision (#70)
+- `GET  /api/users/activity` -- Reads the `user_activities` collection, paginated. This service writes it too (#70): `profile_updated` / `settings_updated` from `update_settings`, `password_changed` from `change_password`, `avatar_updated` / `avatar_deleted` from `update_profile_picture` / `delete_avatar`, and `role_changed` from `update_user_role` and `admin_update_user` (only when a role was actually part of the request). Project, file, and message events are deliberately out of scope - those belong to the services that own them. A write failure never fails the request it describes: `record_activity` in `di_handlers.rs` logs the error and returns, so a broken activity log cannot 502 a password change
 
 ### Data Management
 - `GET  /api/users/export` -- Export user data (GDPR compliance)
@@ -84,7 +84,7 @@ src/
 
 ```bash
 cargo run          # Start on port 8083
-cargo test         # Run the full suite (~441 tests)
+cargo test         # Run the full suite (~465 tests)
 cargo clippy       # Zero warnings required
 ```
 
@@ -114,7 +114,7 @@ cargo clippy       # Zero warnings required
 
 ## Testing
 
-- ~441 tests (exact count lives in CI) across unit, DI integration, and endpoint/security suites
+- ~465 tests (exact count lives in CI) across unit, DI integration, and endpoint/security suites
 - **`tests/di_integration_tests.rs` is the suite that exercises production handlers.** It imports them from `user_service::handlers::di_handlers` and drives all 13 endpoints through trait-based mocks. If you are checking whether a handler's behaviour is actually pinned, this is the file to read.
 - **`tests/handler_integration_tests.rs` does not.** It is 3038 lines that define **13 handlers locally**, mirroring the production set by name, and test those copies; its crate imports are models, traits and one helper, not the handlers under test. Every production equivalent is covered in `di_integration_tests.rs`, so this is redundancy rather than a gap - but a copy of the handler layer will drift from it, and the filename does not say which of the two is authoritative (#75).
 - `tests/integration_tests.rs` was deleted in #75: four of its five tests contained no assertion (`let _ = serde_json::json!(..)` under comments saying "verify crate compiles"), and the fifth defined a `health_handler` inside the test file that always returned `"healthy"` and asserted it returned `"healthy"`. That was actively misleading here, because the real handler returns **503** when MongoDB is unreachable and a passing `test_health_endpoint` gave no reason to look for the test that pins it (`health_tests::unreachable_database_is_a_503`).

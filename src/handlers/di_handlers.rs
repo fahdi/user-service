@@ -23,13 +23,33 @@ use crate::traits::AppState;
 use crate::utils::security::{generate_secure_password, validate_email};
 
 use super::helpers::{
-    build_activity_filter, build_admin_lookup_filter, build_admin_update_fields,
-    build_search_filter, build_settings_success_message, build_sort_doc, collect_validation_errors,
-    compute_pagination_info, determine_target_user_id, extract_user_basic_info,
-    get_permissions_for_role, get_role_definitions, is_admin, parse_object_id, parse_pagination,
-    profile_cache_key, settings_cache_key, standardize_activity_doc, standardize_user_doc,
-    validate_file_size, validate_image_content_type,
+    build_activity_doc, build_activity_filter, build_admin_lookup_filter,
+    build_admin_update_fields, build_search_filter, build_settings_success_message, build_sort_doc,
+    collect_validation_errors, compute_pagination_info, determine_target_user_id,
+    extract_user_basic_info, get_permissions_for_role, get_role_definitions, is_admin,
+    parse_object_id, parse_pagination, profile_cache_key, settings_cache_key,
+    standardize_activity_doc, standardize_user_doc, validate_file_size,
+    validate_image_content_type,
 };
+
+// ============================================================================
+// Activity logging (#70)
+// ============================================================================
+
+/// Record one of this service's own activity events.
+///
+/// A write failure here must never fail the request it describes: the event
+/// being logged already happened and the response for it is already decided.
+/// Log the failure and move on.
+async fn record_activity(state: &AppState, user_id: &str, action: &str) {
+    if let Err(e) = state
+        .repo
+        .insert_activity(build_activity_doc(user_id, action))
+        .await
+    {
+        log::error!("Failed to record activity '{action}' for user {user_id}: {e}");
+    }
+}
 
 // ============================================================================
 // GET /api/users/profile
@@ -429,6 +449,11 @@ pub async fn update_settings(
     let cache_key = settings_cache_key(&claims.user_id);
     state.cache.invalidate_settings_cache(&cache_key).await;
 
+    if body.settings.user.is_some() {
+        record_activity(&state, &claims.user_id, "profile_updated").await;
+    }
+    record_activity(&state, &claims.user_id, "settings_updated").await;
+
     let email_changed = body
         .account_changes
         .as_ref()
@@ -609,6 +634,8 @@ pub async fn update_profile_picture(
     let cache_key = profile_cache_key(&claims.user_id);
     state.cache.invalidate_profile_cache(&cache_key).await;
 
+    record_activity(&state, &claims.user_id, "avatar_updated").await;
+
     Ok(HttpResponse::Ok().json(ProfilePictureResponse {
         success: true,
         message: "Profile picture updated successfully".to_string(),
@@ -727,6 +754,8 @@ pub async fn change_password(
         }
     }
 
+    record_activity(&state, &claims.user_id, "password_changed").await;
+
     Ok(HttpResponse::Ok().json(PasswordChangeResponse {
         success: true,
         message: "Password changed successfully".to_string(),
@@ -787,6 +816,8 @@ pub async fn delete_avatar(req: HttpRequest, state: web::Data<AppState>) -> Resu
 
     let cache_key = profile_cache_key(&claims.user_id);
     state.cache.invalidate_profile_cache(&cache_key).await;
+
+    record_activity(&state, &claims.user_id, "avatar_deleted").await;
 
     Ok(HttpResponse::Ok().json(SuccessResponse {
         success: true,
@@ -984,6 +1015,14 @@ pub async fn admin_update_user(
     let cache_key = profile_cache_key(&user_id);
     state.cache.invalidate_profile_cache(&cache_key).await;
 
+    // The event is about the account whose role changed, not the admin who
+    // changed it, and only fires when a role was actually part of the update
+    // (#70) - this handler also updates name/email/active/verified, none of
+    // which this service can truthfully call role_changed.
+    if body.role.is_some() {
+        record_activity(&state, &user_id, "role_changed").await;
+    }
+
     Ok(HttpResponse::Ok().json(SuccessResponse {
         success: true,
         message: "User updated successfully".to_string(),
@@ -1087,6 +1126,8 @@ pub async fn update_user_role(
 
     let cache_key = profile_cache_key(&claims.user_id);
     state.cache.invalidate_profile_cache(&cache_key).await;
+
+    record_activity(&state, &claims.user_id, "role_changed").await;
 
     Ok(HttpResponse::Ok().json(SuccessResponse {
         success: true,

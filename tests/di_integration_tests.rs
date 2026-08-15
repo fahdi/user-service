@@ -34,6 +34,11 @@ struct MockUserRepo {
     /// handler reads the user first: a global failure would return 500 from
     /// that earlier call and prove nothing about the activity fetch.
     activities_error: Arc<Mutex<Option<String>>>,
+    /// Fail every `insert_activity` call, independent of every other axis
+    /// above (#70). This is the one that proves a broken activity log cannot
+    /// fail the request describing the event: the handler's own read/update
+    /// path must stay untouched while every activity write errors.
+    activity_write_fails: Arc<Mutex<bool>>,
 }
 
 impl MockUserRepo {
@@ -44,6 +49,7 @@ impl MockUserRepo {
             health_fails: Arc::new(Mutex::new(false)),
             query_error: Arc::new(Mutex::new(None)),
             activities_error: Arc::new(Mutex::new(None)),
+            activity_write_fails: Arc::new(Mutex::new(false)),
         }
     }
 
@@ -72,6 +78,13 @@ impl MockUserRepo {
 
     fn with_activity(self, doc: Document) -> Self {
         self.activities.lock().unwrap().push(doc);
+        self
+    }
+
+    /// Every `insert_activity` call fails, so a test can assert the
+    /// originating request still succeeds (#70).
+    fn with_failing_activity_writes(self) -> Self {
+        *self.activity_write_fails.lock().unwrap() = true;
         self
     }
 }
@@ -216,6 +229,22 @@ impl UserRepository for MockUserRepo {
         let skip = skip.unwrap_or(0) as usize;
         let limit = limit.unwrap_or(100) as usize;
         Ok(filtered.into_iter().skip(skip).take(limit).collect())
+    }
+
+    async fn insert_activity(&self, doc: Document) -> RepoResult<String> {
+        if *self.activity_write_fails.lock().unwrap() {
+            return Err(RepoError("mock activity write failed".into()));
+        }
+        let mut activities = self
+            .activities
+            .lock()
+            .map_err(|e| RepoError(e.to_string()))?;
+        let id = doc
+            .get_object_id("_id")
+            .map(|oid| oid.to_hex())
+            .unwrap_or_else(|_| ObjectId::new().to_hex());
+        activities.push(doc);
+        Ok(id)
     }
 }
 
@@ -2281,5 +2310,374 @@ mod error_disclosure_tests {
             !rendered.contains(SECRET),
             "the response repeated the underlying error back to the caller: {rendered}"
         );
+    }
+}
+
+// ============================================================================
+// Activity log writer (#70)
+// ============================================================================
+//
+// `GET /api/users/activity` and the GDPR export read `user_activities`, but
+// nothing wrote it. This is the writer side: each handler that performs one
+// of the events this service can state truthfully about its own action logs
+// it after the operation it describes succeeds. A failed activity write must
+// never fail that operation - proven below by pointing the same mock at a
+// repository whose `insert_activity` always errors and checking the
+// originating request still returns 200.
+
+#[cfg(test)]
+mod activity_writer_tests {
+    use super::*;
+    use user_service::handlers::di_handlers::{
+        admin_update_user, change_password, delete_avatar, update_profile_picture, update_settings,
+        update_user_role,
+    };
+
+    fn recorded_actions(repo: &MockUserRepo) -> Vec<String> {
+        repo.activities
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|a| a.get_str("action").unwrap_or("").to_string())
+            .collect()
+    }
+
+    fn valid_settings_body() -> serde_json::Value {
+        json!({ "settings": {
+            "notifications": { "email": true, "sound": true, "desktop": true },
+            "theme": "dark",
+            "language": "en",
+            "timezone": "UTC"
+        }})
+    }
+
+    #[actix_web::test]
+    async fn password_change_records_password_changed() {
+        let oid = test_oid();
+        let repo = MockUserRepo::new().with_user(make_user_doc(
+            oid,
+            "alice@test.com",
+            "Alice",
+            "customer",
+        ));
+        let check = repo.clone();
+        let state = make_state(repo);
+
+        let app = test::init_service(App::new().app_data(state).route(
+            "/api/users/change-password",
+            web::post().to(change_password),
+        ))
+        .await;
+
+        let req = test::TestRequest::post()
+            .uri("/api/users/change-password")
+            .insert_header(("authorization", customer_token(&oid)))
+            .set_json(json!({
+                "currentPassword": "OldPassword1!",
+                "newPassword": "NewPassword1!"
+            }))
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+        assert_eq!(resp.status().as_u16(), 200);
+
+        let actions = recorded_actions(&check);
+        assert_eq!(
+            actions,
+            vec!["password_changed".to_string()],
+            "change_password must write exactly one password_changed activity"
+        );
+        let activities = check.activities.lock().unwrap();
+        assert_eq!(activities[0].get_str("user_id").unwrap(), oid.to_hex());
+    }
+
+    #[actix_web::test]
+    async fn settings_update_records_settings_updated_only_for_preferences() {
+        let oid = test_oid();
+        let repo = MockUserRepo::new().with_user(make_user_doc(
+            oid,
+            "alice@test.com",
+            "Alice",
+            "customer",
+        ));
+        let check = repo.clone();
+        let state = make_state(repo);
+
+        let app = test::init_service(
+            App::new()
+                .app_data(state)
+                .route("/api/users/settings", web::put().to(update_settings)),
+        )
+        .await;
+
+        let req = test::TestRequest::put()
+            .uri("/api/users/settings")
+            .insert_header(("authorization", customer_token(&oid)))
+            .set_json(valid_settings_body())
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+        assert_eq!(resp.status().as_u16(), 200);
+
+        assert_eq!(
+            recorded_actions(&check),
+            vec!["settings_updated".to_string()],
+            "a settings-only update must not also claim profile_updated"
+        );
+    }
+
+    #[actix_web::test]
+    async fn settings_update_with_profile_fields_records_both_events() {
+        let oid = test_oid();
+        let repo = MockUserRepo::new().with_user(make_user_doc(
+            oid,
+            "alice@test.com",
+            "Alice",
+            "customer",
+        ));
+        let check = repo.clone();
+        let state = make_state(repo);
+
+        let app = test::init_service(
+            App::new()
+                .app_data(state)
+                .route("/api/users/settings", web::put().to(update_settings)),
+        )
+        .await;
+
+        let mut body = valid_settings_body();
+        body["settings"]["user"] = json!({
+            "_id": oid.to_hex(),
+            "email": "alice@test.com",
+            "name": "Alice Updated",
+            "role": "customer"
+        });
+
+        let req = test::TestRequest::put()
+            .uri("/api/users/settings")
+            .insert_header(("authorization", customer_token(&oid)))
+            .set_json(body)
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+        assert_eq!(resp.status().as_u16(), 200);
+
+        let actions = recorded_actions(&check);
+        assert!(
+            actions.contains(&"profile_updated".to_string()),
+            "settings.user was present, so this must record profile_updated: {actions:?}"
+        );
+        assert!(
+            actions.contains(&"settings_updated".to_string()),
+            "settings is always applied, so this must also record settings_updated: {actions:?}"
+        );
+        assert_eq!(actions.len(), 2);
+    }
+
+    #[actix_web::test]
+    async fn avatar_upload_records_avatar_updated() {
+        let oid = test_oid();
+        let repo = MockUserRepo::new().with_user(make_user_doc(
+            oid,
+            "alice@test.com",
+            "Alice",
+            "customer",
+        ));
+        let check = repo.clone();
+        let state = make_state(repo);
+
+        let app = test::init_service(App::new().app_data(state).route(
+            "/api/users/profile-picture",
+            web::post().to(update_profile_picture),
+        ))
+        .await;
+
+        let boundary = "----TestBoundary70";
+        let body_content = format!(
+            "--{b}\r\nContent-Disposition: form-data; name=\"profilePicture\"; filename=\"a.jpg\"\r\nContent-Type: image/jpeg\r\n\r\nfake-bytes\r\n--{b}--\r\n",
+            b = boundary
+        );
+
+        let req = test::TestRequest::post()
+            .uri("/api/users/profile-picture")
+            .insert_header(("authorization", customer_token(&oid)))
+            .insert_header((
+                "content-type",
+                format!("multipart/form-data; boundary={}", boundary),
+            ))
+            .set_payload(body_content)
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+        assert_eq!(resp.status().as_u16(), 200);
+
+        assert_eq!(recorded_actions(&check), vec!["avatar_updated".to_string()]);
+    }
+
+    #[actix_web::test]
+    async fn avatar_delete_records_avatar_deleted() {
+        let oid = test_oid();
+        let repo = MockUserRepo::new().with_user(make_user_doc(
+            oid,
+            "alice@test.com",
+            "Alice",
+            "customer",
+        ));
+        let check = repo.clone();
+        let state = make_state(repo);
+
+        let app = test::init_service(
+            App::new()
+                .app_data(state)
+                .route("/api/users/avatar", web::delete().to(delete_avatar)),
+        )
+        .await;
+
+        let req = test::TestRequest::delete()
+            .uri("/api/users/avatar")
+            .insert_header(("authorization", customer_token(&oid)))
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+        assert_eq!(resp.status().as_u16(), 200);
+
+        assert_eq!(recorded_actions(&check), vec!["avatar_deleted".to_string()]);
+    }
+
+    #[actix_web::test]
+    async fn self_role_update_records_role_changed() {
+        let oid = test_oid();
+        let repo =
+            MockUserRepo::new().with_user(make_user_doc(oid, "admin@test.com", "Admin", "admin"));
+        let check = repo.clone();
+        let state = make_state(repo);
+
+        let app = test::init_service(
+            App::new()
+                .app_data(state)
+                .route("/api/users/roles", web::put().to(update_user_role)),
+        )
+        .await;
+
+        let req = test::TestRequest::put()
+            .uri("/api/users/roles")
+            .insert_header(("authorization", admin_token(&oid)))
+            .set_json(json!({ "role": "editor" }))
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+        assert_eq!(resp.status().as_u16(), 200);
+
+        assert_eq!(recorded_actions(&check), vec!["role_changed".to_string()]);
+    }
+
+    #[actix_web::test]
+    async fn admin_update_with_role_records_role_changed() {
+        let admin_oid = test_oid();
+        let target_oid = test_oid();
+        let repo = MockUserRepo::new().with_user(make_user_doc(
+            target_oid,
+            "target@test.com",
+            "Target",
+            "customer",
+        ));
+        let check = repo.clone();
+        let state = make_state(repo);
+
+        let app = test::init_service(
+            App::new()
+                .app_data(state)
+                .route("/api/admin/users/{id}", web::put().to(admin_update_user)),
+        )
+        .await;
+
+        let req = test::TestRequest::put()
+            .uri(&format!("/api/admin/users/{}", target_oid.to_hex()))
+            .insert_header(("authorization", admin_token(&admin_oid)))
+            .set_json(json!({ "role": "editor" }))
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+        assert_eq!(resp.status().as_u16(), 200);
+
+        let actions = recorded_actions(&check);
+        assert_eq!(actions, vec!["role_changed".to_string()]);
+        let activities = check.activities.lock().unwrap();
+        // The event is about the account whose role changed, not the admin
+        // who changed it.
+        assert_eq!(
+            activities[0].get_str("user_id").unwrap(),
+            target_oid.to_hex()
+        );
+    }
+
+    #[actix_web::test]
+    async fn admin_update_without_role_records_nothing() {
+        let admin_oid = test_oid();
+        let target_oid = test_oid();
+        let repo = MockUserRepo::new().with_user(make_user_doc(
+            target_oid,
+            "target@test.com",
+            "Target",
+            "customer",
+        ));
+        let check = repo.clone();
+        let state = make_state(repo);
+
+        let app = test::init_service(
+            App::new()
+                .app_data(state)
+                .route("/api/admin/users/{id}", web::put().to(admin_update_user)),
+        )
+        .await;
+
+        let req = test::TestRequest::put()
+            .uri(&format!("/api/admin/users/{}", target_oid.to_hex()))
+            .insert_header(("authorization", admin_token(&admin_oid)))
+            .set_json(json!({ "name": "Updated Name" }))
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+        assert_eq!(resp.status().as_u16(), 200);
+
+        assert!(
+            recorded_actions(&check).is_empty(),
+            "no role field was sent, so nothing this service can state \
+             truthfully as role_changed happened"
+        );
+    }
+
+    /// The critical requirement: a broken activity log must not break the
+    /// request it is trying to describe. `change_password` still returns 200
+    /// and still changes the password even though every `insert_activity`
+    /// call errors.
+    #[actix_web::test]
+    async fn a_failing_activity_write_does_not_fail_the_request() {
+        let oid = test_oid();
+        let repo = MockUserRepo::new()
+            .with_user(make_user_doc(oid, "alice@test.com", "Alice", "customer"))
+            .with_failing_activity_writes();
+        let state = make_state(repo);
+
+        let app = test::init_service(App::new().app_data(state).route(
+            "/api/users/change-password",
+            web::post().to(change_password),
+        ))
+        .await;
+
+        let req = test::TestRequest::post()
+            .uri("/api/users/change-password")
+            .insert_header(("authorization", customer_token(&oid)))
+            .set_json(json!({
+                "currentPassword": "OldPassword1!",
+                "newPassword": "NewPassword1!"
+            }))
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+
+        assert_eq!(
+            resp.status().as_u16(),
+            200,
+            "an activity write failure must not turn a successful password \
+             change into an error response"
+        );
+        let body: serde_json::Value = test::read_body_json(resp).await;
+        assert_eq!(body["success"], true);
+        assert!(body["message"]
+            .as_str()
+            .unwrap()
+            .contains("Password changed"));
     }
 }
