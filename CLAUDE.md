@@ -8,7 +8,7 @@ User profile management, settings, avatar uploads, roles, and admin operations w
 - **Port**: 8083 (env: `PORT`, default code says 8081 but Dockerfile exposes 8083)
 - **Database**: MongoDB (`isupercoder` db, collections: `users`, `activities`)
 - **Cache**: Redis (deadpool-redis) + in-memory LRU (500 profiles, 300 settings)
-- **Tests**: ~465 tests (exact count lives in CI)
+- **Tests**: ~476 tests (exact count lives in CI)
 
 ## Architecture
 
@@ -67,6 +67,7 @@ src/
 
 ### Admin
 - `GET  /api/admin/users` -- Search/list all users (admin only)
+- `POST /api/admin/users` -- Create a user account (admin only). No admin-chosen password: the handler generates one and bcrypt-hashes it, the account starts unverified, and the response says a reset is required (#85). Duplicate email is a 409, distinguishing a Mongo `E11000` write error from any other repository failure
 - `PUT  /api/admin/users/{id}` -- Update any user (admin only)
 
 ## Key Design Decisions
@@ -84,7 +85,7 @@ src/
 
 ```bash
 cargo run          # Start on port 8083
-cargo test         # Run the full suite (~465 tests)
+cargo test         # Run the full suite (~476 tests)
 cargo clippy       # Zero warnings required
 ```
 
@@ -114,8 +115,8 @@ cargo clippy       # Zero warnings required
 
 ## Testing
 
-- ~465 tests (exact count lives in CI) across unit, DI integration, and endpoint/security suites
-- **`tests/di_integration_tests.rs` is the suite that exercises production handlers.** It imports them from `user_service::handlers::di_handlers` and drives all 13 endpoints through trait-based mocks. If you are checking whether a handler's behaviour is actually pinned, this is the file to read.
+- ~476 tests (exact count lives in CI) across unit, DI integration, and endpoint/security suites
+- **`tests/di_integration_tests.rs` is the suite that exercises production handlers.** It imports them from `user_service::handlers::di_handlers` and drives all 14 endpoints through trait-based mocks. If you are checking whether a handler's behaviour is actually pinned, this is the file to read.
 - **`tests/handler_integration_tests.rs` does not.** It is 3038 lines that define **13 handlers locally**, mirroring the production set by name, and test those copies; its crate imports are models, traits and one helper, not the handlers under test. Every production equivalent is covered in `di_integration_tests.rs`, so this is redundancy rather than a gap - but a copy of the handler layer will drift from it, and the filename does not say which of the two is authoritative (#75).
 - `tests/integration_tests.rs` was deleted in #75: four of its five tests contained no assertion (`let _ = serde_json::json!(..)` under comments saying "verify crate compiles"), and the fifth defined a `health_handler` inside the test file that always returned `"healthy"` and asserted it returned `"healthy"`. That was actively misleading here, because the real handler returns **503** when MongoDB is unreachable and a passing `test_health_endpoint` gave no reason to look for the test that pins it (`health_tests::unreachable_database_is_a_503`).
 - `mockall 0.13` available for trait mocking

@@ -226,6 +226,33 @@ pub struct AdminUserUpdateRequest {
     pub email_verified: Option<bool>,
 }
 
+// Admin user create request
+//
+// No password field: an admin does not choose the new account's password.
+// The handler generates one and the account starts unverified, same as
+// `import_user_data`'s existing flow. See #85.
+#[derive(Deserialize, Validate)]
+pub struct AdminUserCreateRequest {
+    #[validate(length(min = 1, message = "Name is required"))]
+    pub name: String,
+    #[validate(email(message = "Invalid email format"))]
+    pub email: String,
+    #[validate(custom(function = "validate_user_role", message = "Invalid user role"))]
+    pub role: Option<String>,
+    #[serde(rename = "isActive")]
+    pub is_active: Option<bool>,
+    #[serde(rename = "emailVerified")]
+    pub email_verified: Option<bool>,
+}
+
+// Admin user create response
+#[derive(Serialize)]
+pub struct AdminUserCreateResponse {
+    pub success: bool,
+    pub user: Option<StandardizedUser>,
+    pub message: String,
+}
+
 // Custom validation function for user roles
 fn validate_user_role(role: &str) -> Result<(), validator::ValidationError> {
     let valid_roles = ["admin", "customer", "editor", "subscriber"];
