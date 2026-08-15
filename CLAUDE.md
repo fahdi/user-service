@@ -6,7 +6,7 @@ User profile management, settings, avatar uploads, roles, and admin operations w
 
 - **Framework**: Actix-web 4.8
 - **Port**: 8083 (env: `PORT`, default code says 8081 but Dockerfile exposes 8083)
-- **Database**: MongoDB (`isupercoder` db, collections: `users`, `activities`)
+- **Database**: MongoDB (`isupercoder` db, collections: `users`, `user_activities`). The activity collection is named `user_activities` in code (`impls.rs:37`, `activities_collection()` in `main.rs`); this line called it `activities`, which is not a collection this service opens
 - **Cache**: Redis (deadpool-redis) + in-memory LRU (500 profiles, 300 settings)
 - **Tests**: ~476 tests (exact count lives in CI)
 
@@ -59,7 +59,7 @@ src/
 ### Roles & Activity
 - `GET  /api/users/roles` -- Get user role definitions and permissions
 - `PUT  /api/users/roles` -- Update user role (admin only)
-- `GET  /api/users/activity` -- Reads the `user_activities` collection, paginated. This service writes it too (#70): `profile_updated` / `settings_updated` from `update_settings`, `password_changed` from `change_password`, `avatar_updated` / `avatar_deleted` from `update_profile_picture` / `delete_avatar`, and `role_changed` from `update_user_role` and `admin_update_user` (only when a role was actually part of the request). Project, file, and message events are deliberately out of scope - those belong to the services that own them. A write failure never fails the request it describes: `record_activity` in `di_handlers.rs` logs the error and returns, so a broken activity log cannot 502 a password change
+- `GET  /api/users/activity` -- Reads the `user_activities` collection, paginated. This service writes it too (#70): `profile_updated` / `settings_updated` from `update_settings`, `password_changed` from `change_password`, `avatar_updated` / `avatar_deleted` from `update_profile_picture` / `delete_avatar`, `role_changed` from `update_user_role` and `admin_update_user` (only when a role was actually part of the request), and `account_created` from admin user creation - which this list omitted. Project, file, and message events are deliberately out of scope - those belong to the services that own them. A write failure never fails the request it describes: `record_activity` in `di_handlers.rs` logs the error and returns, so a broken activity log cannot 502 a password change
 
 ### Data Management
 - `GET  /api/users/export` -- Export user data (GDPR compliance)

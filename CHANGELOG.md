@@ -1,3 +1,9 @@
+## 2026-08-15 - correct two activity-log doc inaccuracies (#70)
+
+The collections line called the activity collection `activities`. Code opens `user_activities` (`impls.rs:37`, `activities_collection()`), so the documented name matched nothing - and this is the doc someone reads before going looking for the collection.
+
+The endpoint line listed six recorded actions and omitted `account_created`, which `create_user` records at `di_handlers.rs:1013`.
+
 ## 2026-08-15 - the app's admin "Add User" button had no route to call (app#301, #85)
 
 ### Fixed
