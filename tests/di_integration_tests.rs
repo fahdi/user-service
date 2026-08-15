@@ -1,4 +1,4 @@
-//! Integration tests for all 13 user-service endpoints using trait-based DI.
+//! Integration tests for all 14 user-service endpoints using trait-based DI.
 //!
 //! These tests exercise the actual DI handler functions from `di_handlers.rs`
 //! with mock implementations of UserRepository, CacheService, FileUploader,
@@ -178,7 +178,20 @@ impl UserRepository for MockUserRepo {
     }
 
     async fn insert_user(&self, doc: Document) -> RepoResult<String> {
+        if let Some(msg) = self.query_error.lock().unwrap().clone() {
+            return Err(RepoError(msg));
+        }
         let mut users = self.users.lock().map_err(|e| RepoError(e.to_string()))?;
+        // Stand in for the real unique index on `email`: a real insert past
+        // it fails with an E11000 write error, not a generic one (#85).
+        if let Ok(email) = doc.get_str("email") {
+            if users.iter().any(|u| u.get_str("email").ok() == Some(email)) {
+                return Err(RepoError(format!(
+                    "E11000 duplicate key error collection: isupercoder.users index: \
+                     email_1 dup key: {{ email: \"{email}\" }}"
+                )));
+            }
+        }
         let id = doc
             .get_object_id("_id")
             .map(|oid| oid.to_hex())
@@ -1997,6 +2010,284 @@ mod admin_update_tests {
 }
 
 // ============================================================================
+// 14. POST /api/admin/users
+// ============================================================================
+
+#[cfg(test)]
+mod admin_create_tests {
+    use super::*;
+    use user_service::handlers::di_handlers::admin_create_user;
+
+    #[actix_web::test]
+    async fn test_admin_create_401_without_auth() {
+        let state = make_state(MockUserRepo::new());
+        let app = test::init_service(
+            App::new()
+                .app_data(state)
+                .route("/api/admin/users", web::post().to(admin_create_user)),
+        )
+        .await;
+
+        let req = test::TestRequest::post()
+            .uri("/api/admin/users")
+            .set_json(json!({ "name": "New User", "email": "new@test.com" }))
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+
+        let body: serde_json::Value = test::read_body_json(resp).await;
+        assert_eq!(body["success"], false);
+    }
+
+    #[actix_web::test]
+    async fn test_admin_create_403_non_admin() {
+        let oid = test_oid();
+        let state = make_state(MockUserRepo::new());
+        let app = test::init_service(
+            App::new()
+                .app_data(state)
+                .route("/api/admin/users", web::post().to(admin_create_user)),
+        )
+        .await;
+
+        let req = test::TestRequest::post()
+            .uri("/api/admin/users")
+            .insert_header(("authorization", customer_token(&oid)))
+            .set_json(json!({ "name": "New User", "email": "new@test.com" }))
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+
+        let body: serde_json::Value = test::read_body_json(resp).await;
+        assert_eq!(body["success"], false);
+        assert!(body["error"]
+            .as_str()
+            .unwrap()
+            .contains("Admin access required"));
+    }
+
+    #[actix_web::test]
+    async fn test_admin_create_400_invalid_email() {
+        let oid = test_oid();
+        let state = make_state(MockUserRepo::new());
+        let app = test::init_service(
+            App::new()
+                .app_data(state)
+                .route("/api/admin/users", web::post().to(admin_create_user)),
+        )
+        .await;
+
+        let req = test::TestRequest::post()
+            .uri("/api/admin/users")
+            .insert_header(("authorization", admin_token(&oid)))
+            .set_json(json!({ "name": "New User", "email": "not-an-email" }))
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+
+        let body: serde_json::Value = test::read_body_json(resp).await;
+        assert_eq!(body["success"], false);
+    }
+
+    #[actix_web::test]
+    async fn test_admin_create_400_empty_name() {
+        let oid = test_oid();
+        let state = make_state(MockUserRepo::new());
+        let app = test::init_service(
+            App::new()
+                .app_data(state)
+                .route("/api/admin/users", web::post().to(admin_create_user)),
+        )
+        .await;
+
+        let req = test::TestRequest::post()
+            .uri("/api/admin/users")
+            .insert_header(("authorization", admin_token(&oid)))
+            .set_json(json!({ "name": "", "email": "new@test.com" }))
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+
+        let body: serde_json::Value = test::read_body_json(resp).await;
+        assert_eq!(body["success"], false);
+    }
+
+    #[actix_web::test]
+    async fn test_admin_create_400_invalid_role() {
+        let oid = test_oid();
+        let state = make_state(MockUserRepo::new());
+        let app = test::init_service(
+            App::new()
+                .app_data(state)
+                .route("/api/admin/users", web::post().to(admin_create_user)),
+        )
+        .await;
+
+        let req = test::TestRequest::post()
+            .uri("/api/admin/users")
+            .insert_header(("authorization", admin_token(&oid)))
+            .set_json(json!({
+                "name": "New User",
+                "email": "new@test.com",
+                "role": "superuser"
+            }))
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+
+        let body: serde_json::Value = test::read_body_json(resp).await;
+        assert_eq!(body["success"], false);
+    }
+
+    #[actix_web::test]
+    async fn test_admin_create_success_defaults() {
+        let oid = test_oid();
+        let repo = MockUserRepo::new();
+        let check = repo.clone();
+        let state = make_state(repo);
+        let app = test::init_service(
+            App::new()
+                .app_data(state)
+                .route("/api/admin/users", web::post().to(admin_create_user)),
+        )
+        .await;
+
+        let req = test::TestRequest::post()
+            .uri("/api/admin/users")
+            .insert_header(("authorization", admin_token(&oid)))
+            .set_json(json!({ "name": "New User", "email": "NEW@Test.com" }))
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+
+        assert_eq!(resp.status().as_u16(), 200);
+        let body: serde_json::Value = test::read_body_json(resp).await;
+        assert_eq!(body["success"], true);
+        assert_eq!(body["user"]["email"], "new@test.com", "email is lowercased");
+        assert_eq!(body["user"]["name"], "New User");
+        assert_eq!(
+            body["user"]["role"], "customer",
+            "role defaults to customer"
+        );
+        assert_eq!(body["user"]["isActive"], true, "isActive defaults to true");
+        assert_eq!(
+            body["user"]["emailVerified"], false,
+            "emailVerified defaults to false: nobody has proven this address yet"
+        );
+        assert!(
+            body.get("password").is_none() && body["user"].get("password").is_none(),
+            "the generated password must never appear in the response"
+        );
+        assert!(body["message"].as_str().unwrap().contains("reset"));
+
+        let users = check.users.lock().unwrap();
+        assert_eq!(users.len(), 1);
+        let stored_password = users[0].get_str("password").unwrap();
+        assert!(
+            stored_password.starts_with("$2"),
+            "the stored password must be a bcrypt hash, not the plaintext"
+        );
+    }
+
+    #[actix_web::test]
+    async fn test_admin_create_success_with_explicit_fields() {
+        let oid = test_oid();
+        let repo = MockUserRepo::new();
+        let check = repo.clone();
+        let state = make_state(repo);
+        let app = test::init_service(
+            App::new()
+                .app_data(state)
+                .route("/api/admin/users", web::post().to(admin_create_user)),
+        )
+        .await;
+
+        let req = test::TestRequest::post()
+            .uri("/api/admin/users")
+            .insert_header(("authorization", admin_token(&oid)))
+            .set_json(json!({
+                "name": "Explicit User",
+                "email": "explicit@test.com",
+                "role": "editor",
+                "isActive": false,
+                "emailVerified": true
+            }))
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+
+        assert_eq!(resp.status().as_u16(), 200);
+        let body: serde_json::Value = test::read_body_json(resp).await;
+        assert_eq!(body["user"]["role"], "editor");
+        assert_eq!(body["user"]["isActive"], false);
+        assert_eq!(body["user"]["emailVerified"], true);
+
+        let users = check.users.lock().unwrap();
+        assert_eq!(users[0].get_str("role").unwrap(), "editor");
+        assert!(!users[0].get_bool("isActive").unwrap());
+        assert!(users[0].get_bool("emailVerified").unwrap());
+    }
+
+    #[actix_web::test]
+    async fn test_admin_create_409_duplicate_email() {
+        let oid = test_oid();
+        let repo = MockUserRepo::new().with_user(make_user_doc(
+            test_oid(),
+            "existing@test.com",
+            "Existing",
+            "customer",
+        ));
+        let state = make_state(repo);
+        let app = test::init_service(
+            App::new()
+                .app_data(state)
+                .route("/api/admin/users", web::post().to(admin_create_user)),
+        )
+        .await;
+
+        let req = test::TestRequest::post()
+            .uri("/api/admin/users")
+            .insert_header(("authorization", admin_token(&oid)))
+            .set_json(json!({ "name": "Duplicate", "email": "existing@test.com" }))
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+
+        assert_eq!(
+            resp.status().as_u16(),
+            409,
+            "a duplicate email must be a 409, not a 500 (#85)"
+        );
+        let body: serde_json::Value = test::read_body_json(resp).await;
+        assert_eq!(body["success"], false);
+        assert!(body["error"].as_str().unwrap().contains("already in use"));
+    }
+
+    #[actix_web::test]
+    async fn test_admin_create_500_does_not_leak_database_error() {
+        const SECRET: &str = "mongodb://internal-host:27017 replica-set-alpha";
+        let oid = test_oid();
+        let repo = MockUserRepo::new().with_query_error(SECRET);
+        let state = make_state(repo);
+        let app = test::init_service(
+            App::new()
+                .app_data(state)
+                .route("/api/admin/users", web::post().to(admin_create_user)),
+        )
+        .await;
+
+        let req = test::TestRequest::post()
+            .uri("/api/admin/users")
+            .insert_header(("authorization", admin_token(&oid)))
+            .set_json(json!({ "name": "New User", "email": "new@test.com" }))
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+
+        let status = resp.status().as_u16();
+        let body: serde_json::Value = test::read_body_json(resp).await;
+        let rendered = body.to_string();
+
+        assert_eq!(status, 500);
+        assert!(
+            !rendered.contains(SECRET),
+            "the response repeated the underlying error back to the caller: {rendered}"
+        );
+    }
+}
+
+// ============================================================================
 // Route table: every protected route must authenticate (#44)
 // ============================================================================
 //
@@ -2005,7 +2296,7 @@ mod admin_update_tests {
 // covered the routes someone remembered to write a test for.
 //
 // Authentication here is a per-handler convention rather than a middleware:
-// each handler calls `state.auth.extract_claims(&req)`. All thirteen do so
+// each handler calls `state.auth.extract_claims(&req)`. All fourteen do so
 // today, checked by hand. Nothing holds that in place, which is what this
 // covers: mount the real table with an extractor that always rejects and
 // require every protected route to answer 401.
@@ -2150,7 +2441,8 @@ mod route_table_tests {
     #[actix_web::test]
     async fn authentication_precedes_body_validation() {
         use user_service::models::user::{
-            AdminUserUpdateRequest, PasswordChangeRequest, RoleUpdateRequest, SettingsUpdateRequest,
+            AdminUserCreateRequest, AdminUserUpdateRequest, PasswordChangeRequest,
+            RoleUpdateRequest, SettingsUpdateRequest,
         };
         use validator::Validate;
 
@@ -2175,9 +2467,11 @@ mod route_table_tests {
 
         type Prover = fn(&serde_json::Value) -> Result<(), String>;
 
-        // Every route from #45, with an invalid-but-parseable body and the
-        // request type that has to reject it.
-        let cases: [(&str, &str, &str, serde_json::Value, Prover); 4] = [
+        // The four routes named in #45, plus every one added since that also
+        // authenticates and validates a body - `admin_create_user` (#85) is
+        // the first of those. Each entry is an invalid-but-parseable body and
+        // the request type that has to reject it.
+        let cases: [(&str, &str, &str, serde_json::Value, Prover); 5] = [
             (
                 "change_password",
                 "POST",
@@ -2214,6 +2508,15 @@ mod route_table_tests {
                 "/api/admin/users/507f1f77bcf86cd799439011",
                 json!({ "role": "sysadmin" }),
                 deserializes_but_fails_validation::<AdminUserUpdateRequest>,
+            ),
+            (
+                "admin_create_user",
+                "POST",
+                "/api/admin/users",
+                // Both fields are Strings so it deserializes; the email fails
+                // the `email` validator.
+                json!({ "name": "New User", "email": "not-an-email" }),
+                deserializes_but_fails_validation::<AdminUserCreateRequest>,
             ),
         ];
 
@@ -2329,8 +2632,8 @@ mod error_disclosure_tests {
 mod activity_writer_tests {
     use super::*;
     use user_service::handlers::di_handlers::{
-        admin_update_user, change_password, delete_avatar, update_profile_picture, update_settings,
-        update_user_role,
+        admin_create_user, admin_update_user, change_password, delete_avatar,
+        update_profile_picture, update_settings, update_user_role,
     };
 
     fn recorded_actions(repo: &MockUserRepo) -> Vec<String> {
@@ -2679,5 +2982,76 @@ mod activity_writer_tests {
             .as_str()
             .unwrap()
             .contains("Password changed"));
+    }
+
+    /// The event belongs to the account that was just created, not to the
+    /// admin who created it - `admin_update_user`'s `role_changed` sets the
+    /// same precedent for `user_id` (#85).
+    #[actix_web::test]
+    async fn admin_create_records_account_created_for_the_new_user() {
+        let admin_oid = test_oid();
+        let repo = MockUserRepo::new();
+        let check = repo.clone();
+        let state = make_state(repo);
+
+        let app = test::init_service(
+            App::new()
+                .app_data(state)
+                .route("/api/admin/users", web::post().to(admin_create_user)),
+        )
+        .await;
+
+        let req = test::TestRequest::post()
+            .uri("/api/admin/users")
+            .insert_header(("authorization", admin_token(&admin_oid)))
+            .set_json(json!({ "name": "New User", "email": "brand-new@test.com" }))
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+        assert_eq!(resp.status().as_u16(), 200);
+        let body: serde_json::Value = test::read_body_json(resp).await;
+        let new_user_id = body["user"]["id"].as_str().unwrap().to_string();
+
+        assert_eq!(
+            recorded_actions(&check),
+            vec!["account_created".to_string()]
+        );
+        let activities = check.activities.lock().unwrap();
+        assert_eq!(
+            activities[0].get_str("user_id").unwrap(),
+            new_user_id,
+            "the event is about the account that was created, not the admin"
+        );
+    }
+
+    /// Same guarantee as `change_password` above: a broken activity log must
+    /// not turn a successful account creation into an error response (#85).
+    #[actix_web::test]
+    async fn admin_create_failing_activity_write_does_not_fail_the_request() {
+        let admin_oid = test_oid();
+        let repo = MockUserRepo::new().with_failing_activity_writes();
+        let state = make_state(repo);
+
+        let app = test::init_service(
+            App::new()
+                .app_data(state)
+                .route("/api/admin/users", web::post().to(admin_create_user)),
+        )
+        .await;
+
+        let req = test::TestRequest::post()
+            .uri("/api/admin/users")
+            .insert_header(("authorization", admin_token(&admin_oid)))
+            .set_json(json!({ "name": "New User", "email": "still-created@test.com" }))
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+
+        assert_eq!(
+            resp.status().as_u16(),
+            200,
+            "an activity write failure must not turn a successful account \
+             creation into an error response"
+        );
+        let body: serde_json::Value = test::read_body_json(resp).await;
+        assert_eq!(body["success"], true);
     }
 }

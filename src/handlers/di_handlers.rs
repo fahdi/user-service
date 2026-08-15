@@ -13,11 +13,11 @@ use validator::Validate;
 
 use crate::models::response::{ErrorResponse, SuccessResponse};
 use crate::models::user::{
-    ActivityQuery, AdminUserUpdateRequest, DataExportResponse, DataImportRequest,
-    DataImportResponse, PasswordChangeRequest, PasswordChangeResponse, ProfilePictureResponse,
-    RoleUpdateRequest, SettingsResponse, SettingsUpdateRequest, UserActivityResponse,
-    UserDataExport, UserProfileResponse, UserRolesResponse, UserSearchQuery, UserSearchResponse,
-    UserSettings,
+    ActivityQuery, AdminUserCreateRequest, AdminUserCreateResponse, AdminUserUpdateRequest,
+    DataExportResponse, DataImportRequest, DataImportResponse, PasswordChangeRequest,
+    PasswordChangeResponse, ProfilePictureResponse, RoleUpdateRequest, SettingsResponse,
+    SettingsUpdateRequest, StandardizedUser, UserActivityResponse, UserDataExport,
+    UserProfileResponse, UserRolesResponse, UserSearchQuery, UserSearchResponse, UserSettings,
 };
 use crate::traits::AppState;
 use crate::utils::security::{generate_secure_password, validate_email};
@@ -910,6 +910,135 @@ pub async fn admin_search_users(
         users,
         pagination,
         message: None,
+    }))
+}
+
+// ============================================================================
+// POST /api/admin/users (create)
+// ============================================================================
+
+/// An admin creates a user account (#85).
+///
+/// The account does not get an admin-chosen password. Letting an admin set
+/// one means either the admin now knows the user's password (bad practice)
+/// or a second password-strength policy has to be invented and kept in sync
+/// with `PasswordChangeRequest`'s. Instead this generates one with
+/// `generate_secure_password` and bcrypt-hashes it the same way
+/// `change_password` does, matching the precedent `import_user_data` already
+/// set. The account starts unverified; the response says a reset is
+/// required rather than returning the generated password, since nothing in
+/// this service currently delivers it to the user out of band.
+pub async fn admin_create_user(
+    req: HttpRequest,
+    body: web::Json<AdminUserCreateRequest>,
+    state: web::Data<AppState>,
+) -> Result<HttpResponse> {
+    let claims = match state.auth.extract_claims(&req).await {
+        Ok(c) => c,
+        Err(_) => {
+            return Ok(HttpResponse::Unauthorized().json(ErrorResponse {
+                success: false,
+                error: "Authentication required".to_string(),
+            }));
+        }
+    };
+
+    if let Err(validation_errors) = body.validate() {
+        return Ok(HttpResponse::BadRequest().json(ErrorResponse {
+            success: false,
+            error: collect_validation_errors(&validation_errors),
+        }));
+    }
+
+    if !is_admin(&claims.role, &claims.role_type) {
+        return Ok(HttpResponse::Forbidden().json(ErrorResponse {
+            success: false,
+            error: "Admin access required".to_string(),
+        }));
+    }
+
+    let email = body.email.to_lowercase();
+    let role = body.role.clone().unwrap_or_else(|| "customer".to_string());
+    let is_active = body.is_active.unwrap_or(true);
+    let email_verified = body.email_verified.unwrap_or(false);
+
+    let temp_password = generate_secure_password();
+    let password_hash = match hash(&temp_password, 12) {
+        Ok(h) => h,
+        Err(_) => {
+            return Ok(HttpResponse::InternalServerError().json(ErrorResponse {
+                success: false,
+                error: "Failed to process password".to_string(),
+            }));
+        }
+    };
+
+    let now = DateTime::now();
+    let now_str = now.try_to_rfc3339_string().unwrap_or_default();
+    let user_doc = doc! {
+        "email": &email,
+        "name": &body.name,
+        "role": &role,
+        "isActive": is_active,
+        "emailVerified": email_verified,
+        "password": password_hash,
+        "createdAt": now,
+        "updatedAt": now,
+    };
+
+    let inserted_id = match state.repo.insert_user(user_doc).await {
+        Ok(id) => id,
+        Err(e) => {
+            // A raw driver error would surface as a 500 even though this is
+            // an ordinary conflict: there is a unique index on `email`, and
+            // Mongo reports a violation as an E11000 write error (same check
+            // as auth-service's registration path).
+            if e.0.contains("E11000") {
+                return Ok(HttpResponse::Conflict().json(ErrorResponse {
+                    success: false,
+                    error: "Email address is already in use".to_string(),
+                }));
+            }
+            return Ok(HttpResponse::InternalServerError().json(ErrorResponse {
+                success: false,
+                error: {
+                    // The detail goes to the log, not the caller (#47).
+                    log::error!("Database error: {}", e);
+                    "Failed to create user".to_string()
+                },
+            }));
+        }
+    };
+
+    record_activity(&state, &inserted_id, "account_created").await;
+
+    let user = StandardizedUser {
+        _id: inserted_id.clone(),
+        id: inserted_id,
+        email,
+        name: body.name.clone(),
+        role,
+        is_active,
+        email_verified,
+        created_at: now_str.clone(),
+        updated_at: now_str,
+        last_login: None,
+        phone: None,
+        company: None,
+        department: None,
+        position: None,
+        username: None,
+        profile_picture: None,
+        use_gravatar: None,
+        location: None,
+    };
+
+    Ok(HttpResponse::Ok().json(AdminUserCreateResponse {
+        success: true,
+        user: Some(user),
+        message: "User created successfully. A temporary password has been generated; \
+                  the user must reset their password before signing in."
+            .to_string(),
     }))
 }
 

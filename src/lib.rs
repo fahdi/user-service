@@ -151,6 +151,7 @@ pub fn configure_routes(cfg: &mut actix_web::web::ServiceConfig) {
         .service(
             web::scope("/api/admin/users")
                 .route("", web::get().to(admin_search_users))
+                .route("", web::post().to(admin_create_user))
                 .route("/{id}", web::put().to(admin_update_user)),
         );
 }

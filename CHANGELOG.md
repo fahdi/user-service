@@ -1,3 +1,23 @@
+## 2026-08-15 - the app's admin "Add User" button had no route to call (app#301, #85)
+
+### Fixed
+The admin scope only ever exposed `GET /api/admin/users` (search) and `PUT /api/admin/users/{id}` (update). The app's "Add User" button called a create route that did not exist, got a 405 on every click, and was removed as a stopgap. This adds the missing route so the button can come back and actually work.
+
+### Added
+- `POST /api/admin/users` (`admin_create_user` in `src/handlers/di_handlers.rs`), routed in `src/lib.rs`. Admin only, same convention as every other handler: `state.auth.extract_claims(&req)` then `is_admin(&claims.role, &claims.role_type)`, checked in that order per #45/#80 and added to the `authentication_precedes_body_validation` case list.
+- `AdminUserCreateRequest` / `AdminUserCreateResponse` (`src/models/user.rs`). Request validates `name` (non-empty), `email` (format), and an optional `role` (against the known role set); `isActive` defaults to `true`, `emailVerified` defaults to `false`.
+
+### Decisions
+- **No admin-chosen password.** The request has no password field. An admin-supplied password either becomes known to the admin (bad practice) or needs a second strength policy kept in sync with `PasswordChangeRequest`'s. The handler generates one with `generate_secure_password()` and bcrypt-hashes it (cost 12, matching `change_password`), same as the existing `import_user_data` flow. The generated password is never returned; the response says a reset is required. Nothing in this service currently delivers it to the user out of band - out of scope here.
+- **Duplicate email is a 409, not a 500.** There is a unique index on `email`; the handler distinguishes a Mongo `E11000` write error from any other repository failure (same check as `auth-service/src/db.rs`'s registration path) rather than letting a raw driver error surface as a 500.
+- **200, not 201, on success.** No Rust service in this monorepo returns 201 for a creation endpoint today; matched that rather than introducing the one 201 in the codebase.
+- **`account_created` activity, keyed to the new account.** Written via the existing `record_activity` (#70) against the new user's id, not the admin's - same precedent `admin_update_user`'s `role_changed` already set. A failed write does not fail the request.
+
+### Verification
+- RED first: `tests/di_integration_tests.rs::admin_create_tests` and the two new `activity_writer_tests` cases written against `admin_create_user` and `AdminUserCreateRequest` before either existed - failed to compile (`no admin_create_user in handlers::di_handlers`, `no AdminUserCreateRequest in models::user`).
+- Mutation-tested: short-circuiting the `E11000` check (`if false && e.0.contains("E11000")`) fails exactly `test_admin_create_409_duplicate_email` (500 instead of 409) and no other test.
+- 476 tests (up from 465: +11), `cargo clippy --all-targets -- -D warnings` clean, `cargo fmt --check` clean.
+
 ## 2026-08-15 - user_activities had no writer, so the activity log and the GDPR export were always empty (#70)
 
 ### Fixed
